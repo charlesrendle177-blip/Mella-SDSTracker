@@ -8,6 +8,16 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <!-- Supabase CDN — cross-device sync -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <!-- PDF.js CDN — client-side CV text extraction (Upload CVs tab).
+       Pinned to 3.11.174: the last pdfjs-dist release with a classic
+       UMD build/pdf.min.js — later releases (4.x+) ship ES modules only,
+       which don't drop into a plain <script> tag like this. -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+  <script>
+    if (window.pdfjsLib) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+    }
+  </script>
 
   <style>
     /* ===================== TOKENS ===================== */
@@ -289,6 +299,32 @@
       overflow-y: auto;
     }
 
+    /* ===================== CV UPLOAD ===================== */
+    .cv-dropzone {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      text-align: center;
+      padding: 28px 16px;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    .cv-dropzone:hover, .cv-dropzone.drag { border-color: var(--accent); background: #fdf6ef; }
+    .cv-dropzone-icon { font-size: 26px; }
+    .cv-dropzone-text { font-size: 13px; font-weight: 600; color: var(--text); }
+    .cv-dropzone-sub { font-size: 11.5px; color: var(--label); }
+    .cv-review-filename { font-size: 11px; color: var(--label); margin-bottom: 8px; word-break: break-all; }
+    .cv-review-note {
+      font-size: 12px; color: #991b1b; background: #fee2e2;
+      border-radius: 6px; padding: 6px 8px; margin-bottom: 10px;
+    }
+    .cv-review-actions { display: flex; gap: 8px; margin-top: 10px; }
+
     /* ===================== TOAST / MODAL ===================== */
     .toast {
       position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
@@ -337,6 +373,7 @@
     <div class="tabs">
       <button class="tab active" onclick="showTab('overview', this)">Overview</button>
       <button class="tab" onclick="showTab('pipeline', this); candidates_render()">Pipeline</button>
+      <button class="tab" onclick="showTab('upload', this)">Upload CVs</button>
     </div>
 
     <!-- SECTIONS -->
@@ -419,6 +456,39 @@
 
         <!-- Candidate list -->
         <div id="pipeline-list"></div>
+      </div>
+
+      <!-- ===== UPLOAD CVS ===== -->
+      <div id="upload" class="section">
+        <div class="section-header">
+          <h2>Upload CVs</h2>
+          <p>Pull name, mobile and email straight off a CV — review, then add to the pipeline</p>
+        </div>
+
+        <div class="form-block">
+          <div class="form-block-title">Select CV files (PDF)</div>
+          <label class="cv-dropzone" for="cv-files"
+            ondragover="event.preventDefault(); this.classList.add('drag')"
+            ondragleave="this.classList.remove('drag')"
+            ondrop="event.preventDefault(); this.classList.remove('drag'); cv_filesChosen(event.dataTransfer.files)">
+            <span class="cv-dropzone-icon">📄</span>
+            <span class="cv-dropzone-text">Click to choose CV(s), or drag &amp; drop here</span>
+            <span class="cv-dropzone-sub">PDF only — one file or a whole batch at once</span>
+          </label>
+          <input type="file" id="cv-files" accept="application/pdf" multiple style="display:none" onchange="cv_filesChosen(this.files)">
+          <div id="cv-file-summary" class="mini-label" style="margin-top:8px; text-transform:none; letter-spacing:normal;"></div>
+          <button class="btn btn-primary btn-block" id="cv-process-btn" style="margin-top:12px;" onclick="cv_processFiles()" disabled>Process CVs</button>
+        </div>
+
+        <div id="cv-review-wrap" hidden>
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; gap:10px;">
+            <div class="form-block-title" style="margin-bottom:0;">Review before adding (<span id="cv-review-count">0</span>)</div>
+            <button class="btn btn-green btn-sm" onclick="cv_addAll()">+ Add all to pipeline</button>
+          </div>
+          <div id="cv-review-list"></div>
+        </div>
+
+        <div id="cv-empty" class="empty">No CVs processed yet — choose PDF files above and hit "Process CVs".</div>
       </div>
 
     </div><!-- /main -->
@@ -886,6 +956,230 @@
 
       list.innerHTML = filtered.map(candidateCardHTML).join('');
       renderOverview();
+    }
+
+    /* ============================================================
+       FEATURE: UPLOAD CVS (PDF.js extraction + review queue)
+       Selected PDFs are read client-side with PDF.js, text is pulled
+       from every page, and simple regex/line heuristics guess name,
+       mobile and email. Results land in `cvPending` (in-memory only)
+       for review/editing — nothing here calls candidates_save() until
+       "Add to pipeline" / "Add all to pipeline" is clicked.
+       Pending row shape: { _uid, name, mobile, email, filename, error }
+    ============================================================ */
+    let cvSelectedFiles = [];
+    let cvPending = [];
+
+    const CV_EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w-]+/;
+    const CV_MOBILE_RE = /(?:\+44\s?7\d{3}|07\d{3})[\s-]?\d{3}[\s-]?\d{3,4}/;
+    const CV_URL_RE = /^(https?:\/\/|www\.)/i;
+
+    function cv_filesChosen(fileList) {
+      const all = Array.from(fileList || []);
+      const files = all.filter(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
+      const skipped = all.length - files.length;
+      cvSelectedFiles = files;
+
+      const summary = document.getElementById('cv-file-summary');
+      const btn = document.getElementById('cv-process-btn');
+      if (!files.length) {
+        summary.textContent = skipped ? 'Only PDF files are supported — please choose PDF CVs.' : '';
+        btn.disabled = true;
+        return;
+      }
+      summary.textContent = files.length + ' file' + (files.length === 1 ? '' : 's') + ' selected' +
+        (skipped ? ' (' + skipped + ' non-PDF file' + (skipped === 1 ? '' : 's') + ' skipped)' : '');
+      btn.disabled = false;
+    }
+
+    // Reads a File as an ArrayBuffer, runs it through PDF.js, and
+    // concatenates getTextContent() output from every page. Uses each
+    // text item's hasEOL flag (set by PDF.js at real line breaks) to
+    // rebuild line structure well enough for the name heuristic below.
+    async function cv_extractText(file) {
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      let fullText = '';
+      for (let p = 1; p <= pdf.numPages; p++) {
+        const page = await pdf.getPage(p);
+        const content = await page.getTextContent();
+        fullText += content.items.map(it => it.str + (it.hasEOL ? '\n' : ' ')).join('') + '\n';
+      }
+      return fullText;
+    }
+
+    // Best-effort name guess: first non-empty line that isn't an email,
+    // phone number, URL, "Curriculum Vitae" heading, or implausibly long.
+    // This will sometimes be wrong (headers, addresses, job titles) —
+    // that's exactly why extraction lands in an editable review row
+    // rather than being saved straight to the pipeline.
+    function cv_guessName(text) {
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        if (line.length > 40) continue;
+        if (CV_EMAIL_RE.test(line)) continue;
+        if (CV_MOBILE_RE.test(line)) continue;
+        if (CV_URL_RE.test(line)) continue;
+        if (line.toLowerCase().includes('curriculum vitae')) continue;
+        return line;
+      }
+      return '';
+    }
+
+    function cv_parse(text, filename) {
+      const emailMatch = text.match(CV_EMAIL_RE);
+      const mobileMatch = text.match(CV_MOBILE_RE);
+      return {
+        _uid: newId(),
+        name: cv_guessName(text),
+        mobile: mobileMatch ? mobileMatch[0].replace(/\s+/g, '') : '',
+        email: emailMatch ? emailMatch[0] : '',
+        filename,
+        error: ''
+      };
+    }
+
+    async function cv_processFiles() {
+      if (!cvSelectedFiles.length) return;
+      if (!window.pdfjsLib) { alert('The PDF reader failed to load (check your internet connection) — reload the page and try again.'); return; }
+
+      const btn = document.getElementById('cv-process-btn');
+      const originalLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Processing…';
+
+      for (const file of cvSelectedFiles) {
+        try {
+          const text = await cv_extractText(file);
+          const cleaned = (text || '').trim();
+          if (!cleaned) {
+            cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name,
+              error: 'Couldn’t read text from this PDF (likely a scanned image) — enter details manually.' });
+          } else {
+            cvPending.push(cv_parse(cleaned, file.name));
+          }
+        } catch (err) {
+          cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name,
+            error: 'Couldn’t read this PDF — enter details manually.' });
+        }
+      }
+
+      cvSelectedFiles = [];
+      document.getElementById('cv-files').value = '';
+      document.getElementById('cv-file-summary').textContent = '';
+      btn.textContent = originalLabel;
+      btn.disabled = true;
+      cv_renderPending();
+    }
+
+    function cv_field(uid, field, value) {
+      const row = cvPending.find(r => r._uid === uid);
+      if (row) row[field] = value;
+    }
+
+    function cv_discard(uid) {
+      cvPending = cvPending.filter(r => r._uid !== uid);
+      cv_renderPending();
+    }
+
+    // Builds a full candidate object matching candidates_add()'s shape.
+    function cv_toCandidate(row) {
+      return {
+        id: newId(),
+        name: (row.name || '').trim(),
+        mobile: (row.mobile || '').trim(),
+        email: (row.email || '').trim(),
+        cvDate: todayISO(), cvLocation: row.filename || '',
+        s1Done: false, s1Date: '',
+        outcome: '', notes: '',
+        fitRating: '', fitNotes: '',
+        startDate: '', startTime: '',
+        s3Done: false, s3Date: '',
+        s4Done: false, s4Date: '',
+        createdAt: new Date().toISOString()
+      };
+    }
+
+    function cv_addOne(uid) {
+      const row = cvPending.find(r => r._uid === uid);
+      if (!row) return;
+      if (!row.name || !row.name.trim()) { alert('Please enter a candidate name before adding to the pipeline.'); return; }
+
+      const items = candidates_get();
+      items.unshift(cv_toCandidate(row));
+      candidates_save(items);
+      cvPending = cvPending.filter(r => r._uid !== uid);
+
+      candidates_render();
+      cv_renderPending();
+      showToast('Added to pipeline');
+    }
+
+    function cv_addAll() {
+      if (!cvPending.length) return;
+      const missingName = cvPending.filter(r => !r.name || !r.name.trim());
+      if (missingName.length && !confirm(missingName.length + ' row(s) have no name and will be skipped — add the rest to the pipeline?')) return;
+
+      const items = candidates_get();
+      const remaining = [];
+      let added = 0;
+      cvPending.forEach(row => {
+        if (!row.name || !row.name.trim()) { remaining.push(row); return; }
+        items.unshift(cv_toCandidate(row));
+        added++;
+      });
+      candidates_save(items);
+      cvPending = remaining;
+
+      candidates_render();
+      cv_renderPending();
+      if (added) showToast(added + ' candidate' + (added === 1 ? '' : 's') + ' added to pipeline');
+    }
+
+    function cv_renderPending() {
+      const wrap = document.getElementById('cv-review-wrap');
+      const empty = document.getElementById('cv-empty');
+      const list = document.getElementById('cv-review-list');
+      const count = document.getElementById('cv-review-count');
+      if (!wrap || !list || !count) return;
+
+      count.textContent = cvPending.length;
+      if (!cvPending.length) {
+        wrap.hidden = true;
+        empty.style.display = '';
+        list.innerHTML = '';
+        return;
+      }
+      empty.style.display = 'none';
+      wrap.hidden = false;
+
+      list.innerHTML = cvPending.map(row => `
+        <div class="card">
+          <div class="cv-review-filename">📄 ${escapeHtml(row.filename)}</div>
+          ${row.error ? `<div class="cv-review-note">${escapeHtml(row.error)}</div>` : ''}
+          <div class="field-grid-2">
+            <div class="wide">
+              <label class="mini-label">Name</label>
+              <input class="mini-input" type="text" value="${escapeHtml(row.name)}" placeholder="Candidate name"
+                oninput="cv_field('${row._uid}','name',this.value)">
+            </div>
+            <div>
+              <label class="mini-label">Mobile</label>
+              <input class="mini-input" type="tel" value="${escapeHtml(row.mobile)}" placeholder="07…"
+                oninput="cv_field('${row._uid}','mobile',this.value)">
+            </div>
+            <div>
+              <label class="mini-label">Email</label>
+              <input class="mini-input" type="email" value="${escapeHtml(row.email)}" placeholder="name@example.com"
+                oninput="cv_field('${row._uid}','email',this.value)">
+            </div>
+          </div>
+          <div class="cv-review-actions">
+            <button class="btn btn-primary btn-sm" onclick="cv_addOne('${row._uid}')">Add to pipeline</button>
+            <button class="btn btn-danger btn-sm" onclick="cv_discard('${row._uid}')">Discard</button>
+          </div>
+        </div>
+      `).join('');
     }
 
     /* ============================================================
