@@ -293,22 +293,116 @@
     .candidate:not([data-outcome="booked"]) .step[data-step="3"],
     .candidate:not([data-outcome="booked"]) .step[data-step="4"] { opacity: .45; }
 
-    /* ===================== FIT BADGE / FILTER CHIPS ===================== */
-    .filter-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
-    .chip {
-      padding: 6px 14px;
-      border-radius: 20px;
-      border: 1.5px solid var(--border);
-      background: transparent;
-      font-size: 12.5px;
-      font-weight: 600;
-      color: var(--label);
-      transition: all .15s;
+    /* ===================== KANBAN BOARD (Pipeline tab) ===================== */
+    .kanban-board {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      overflow-x: auto;
+      padding-bottom: 10px;
+      margin: 0 -18px;
+      padding-left: 18px;
+      padding-right: 18px;
     }
-    .chip.active {
-      background: var(--accent);
-      border-color: var(--accent);
+    .kanban-column {
+      flex: 0 0 260px;
+      min-width: 260px;
+      max-width: 260px;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      max-height: 72vh;
+    }
+    .kanban-column-topbar { height: 4px; flex: none; background: var(--col-color, var(--label)); }
+    .kanban-column-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 14px 10px;
+      border-bottom: 1.5px solid var(--border);
+      flex: none;
+    }
+    .kanban-column-label {
+      flex: 1;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .05em;
       color: var(--text);
+    }
+    .kanban-count-badge {
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: var(--col-color, var(--label));
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+    }
+    .kanban-column-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 100px;
+      transition: background-color .15s;
+    }
+    .kanban-column-body.drag-over { background: var(--surface-2); }
+    .kanban-card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      box-shadow: var(--shadow);
+      cursor: grab;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      transition: box-shadow .15s, opacity .15s;
+    }
+    .kanban-card:hover { box-shadow: 0 2px 6px rgba(30,24,4,.09), 0 10px 22px rgba(30,24,4,.1); }
+    .kanban-card.dragging { opacity: .4; }
+    .kanban-card-name { font-family: var(--font-display); font-size: 14px; font-weight: 600; }
+    .kanban-card-mobile { font-size: 12px; color: var(--label); }
+    .kanban-card-note {
+      font-size: 11.5px;
+      color: var(--label);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .kanban-fit-badge { align-self: flex-start; }
+    .kanban-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 26px 10px;
+      color: var(--label);
+      font-size: 12.5px;
+      text-align: center;
+    }
+    .kanban-empty-icon {
+      width: 34px; height: 34px;
+      border-radius: 10px;
+      background: var(--surface-2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      flex: none;
     }
 
     .msg-preview {
@@ -470,18 +564,11 @@
           </div>
         </div>
 
-        <!-- Search / filter -->
-        <input type="search" id="search-box" placeholder="Search name, mobile, email…" oninput="candidates_render()" style="margin-bottom:10px;" />
-        <div class="filter-chips" id="filter-chips">
-          <button type="button" class="chip active" data-filter="not-touched" onclick="candidates_setFilter('not-touched', this)">Not Touched</button>
-          <button type="button" class="chip" data-filter="messaged" onclick="candidates_setFilter('messaged', this)">Messaged</button>
-          <button type="button" class="chip" data-filter="called" onclick="candidates_setFilter('called', this)">Called</button>
-          <button type="button" class="chip" data-filter="booked" onclick="candidates_setFilter('booked', this)">Booked</button>
-          <button type="button" class="chip" data-filter="all" onclick="candidates_setFilter('all', this)">All</button>
-        </div>
+        <!-- Search -->
+        <input type="search" id="search-box" placeholder="Search name, mobile, email…" oninput="candidates_render()" style="margin-bottom:14px;" />
 
-        <!-- Candidate list -->
-        <div id="pipeline-list"></div>
+        <!-- Kanban board -->
+        <div class="kanban-board" id="kanban-board"></div>
       </div>
 
       <!-- ===== UPLOAD CVS ===== -->
@@ -530,6 +617,16 @@
       <div class="modal-actions">
         <button class="btn btn-primary" onclick="document.getElementById('copy-modal').hidden = true;">Done</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Full candidate detail — opened from a Kanban tile -->
+  <div class="modal-backdrop" id="detail-modal" hidden onclick="if (event.target === this) candidate_closeDetail()">
+    <div class="modal" style="max-width:540px; max-height:88vh; overflow-y:auto;">
+      <div style="display:flex; justify-content:flex-end;">
+        <button class="btn btn-ghost btn-sm" onclick="candidate_closeDetail()">✕ Close</button>
+      </div>
+      <div id="detail-modal-body"></div>
     </div>
   </div>
 
@@ -664,16 +761,6 @@
        fitRating: '' | 'low' | 'medium' | 'high'
     ============================================================ */
     const CANDIDATES_KEY = 'mella_candidates';
-
-    // Pipeline tab stage filter — defaults to "Not Touched" on first load
-    let pipelineFilter = 'not-touched';
-
-    function candidates_setFilter(value, btn) {
-      pipelineFilter = value;
-      document.querySelectorAll('#filter-chips .chip').forEach(b => b.classList.remove('active'));
-      btn?.classList.add('active');
-      candidates_render();
-    }
 
     function candidates_get() {
       try { return JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]'); } catch { return []; }
@@ -960,27 +1047,204 @@
       `;
     }
 
+    /* ============================================================
+       FEATURE: PIPELINE KANBAN BOARD
+       Five fixed columns. Column membership is derived straight from
+       s1Done/outcome (the same fields categoryOf() reads) rather than
+       from categoryOf() itself, since "Booked" here must cover the
+       'booked'/'confirmed'/'started' categories as ONE column while
+       the 4-step tracker inside the detail view keeps tracking those
+       sub-states independently.
+    ============================================================ */
+    const KANBAN_COLUMNS = [
+      { key: 'uploaded',        label: 'Uploaded CV',     color: 'var(--label)', match: c => !c.s1Done },
+      { key: 'contacted',       label: 'Contact Made',    color: 'var(--amber)', match: c => !!c.s1Done && (c.outcome === '' || c.outcome === 'callback') },
+      { key: 'not-interested',  label: 'Not Interested',  color: 'var(--red)',   match: c => c.outcome === 'not-interested' },
+      { key: 'interested',      label: 'Interested',      color: 'var(--accent)', match: c => c.outcome === 'not-booked' },
+      { key: 'booked',          label: 'Booked',          color: 'var(--green)', match: c => c.outcome === 'booked' }
+    ];
+
+    function columnOf(c) {
+      for (const col of KANBAN_COLUMNS) { if (col.match(c)) return col.key; }
+      return 'uploaded';
+    }
+
+    // Applies the meaning of a drop into `columnKey` to the candidate's
+    // underlying fields, per the Pipeline tab's column spec. Dropping into
+    // a call-outcome column (not-interested / interested / booked) when
+    // contact hasn't been logged yet backfills s1Done/s1Date first, rather
+    // than blocking the drop — you can't have a call outcome with no call.
+    function kanban_moveCandidate(id, columnKey) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+
+      const backfillContact = () => {
+        item.s1Done = true;
+        if (!item.s1Date) item.s1Date = todayISO();
+      };
+
+      switch (columnKey) {
+        case 'uploaded':
+          item.s1Done = false; item.s1Date = ''; item.outcome = '';
+          break;
+        case 'contacted':
+          item.s1Done = true;
+          if (!item.s1Date) item.s1Date = todayISO();
+          item.outcome = '';
+          break;
+        case 'not-interested':
+          if (!item.s1Done) backfillContact();
+          item.outcome = 'not-interested';
+          break;
+        case 'interested':
+          if (!item.s1Done) backfillContact();
+          item.outcome = 'not-booked';
+          break;
+        case 'booked':
+          if (!item.s1Done) backfillContact();
+          item.outcome = 'booked';
+          break;
+        default:
+          return;
+      }
+      candidates_save(items);
+      candidates_render();
+    }
+
+    // ---- Native HTML5 drag-and-drop wiring ----
+    let kanbanDragId = null;
+
+    function kanban_dragStart(e, id) {
+      kanbanDragId = id;
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', id); } catch {}
+      e.currentTarget.classList.add('dragging');
+    }
+
+    function kanban_dragEnd(e) {
+      e.currentTarget.classList.remove('dragging');
+      kanbanDragId = null;
+      document.querySelectorAll('.kanban-column-body.drag-over').forEach(el => el.classList.remove('drag-over'));
+    }
+
+    function kanban_dragOver(e) {
+      e.preventDefault(); // required to allow a drop
+      e.dataTransfer.dropEffect = 'move';
+      e.currentTarget.classList.add('drag-over');
+    }
+
+    function kanban_dragLeave(e) {
+      e.currentTarget.classList.remove('drag-over');
+    }
+
+    function kanban_drop(e, columnKey) {
+      e.preventDefault();
+      e.currentTarget.classList.remove('drag-over');
+      const id = kanbanDragId || e.dataTransfer.getData('text/plain');
+      kanbanDragId = null;
+      if (!id) return;
+      // Dropping back onto the column a card is already in is a harmless
+      // no-op re-save (fields already match that column's meaning).
+      kanban_moveCandidate(id, columnKey);
+    }
+
+    // Compact Kanban tile — name, mobile, fit badge, one-line note preview.
+    // Click anywhere on the tile opens the full detail view in a modal;
+    // the tile itself is the drag handle (draggable="true" on the whole card).
+    function candidateTileHTML(c) {
+      const fit = c.fitRating
+        ? `<span class="badge ${FIT_META[c.fitRating].badge} kanban-fit-badge">${FIT_META[c.fitRating].label}</span>`
+        : '';
+      const noteText = (c.notes || c.fitNotes || '').trim();
+      return `
+        <div class="kanban-card" draggable="true" data-id="${c.id}"
+          ondragstart="kanban_dragStart(event,'${c.id}')"
+          ondragend="kanban_dragEnd(event)"
+          onclick="candidate_openDetail('${c.id}')">
+          <div class="kanban-card-name">${escapeHtml(c.name) || '(no name)'}</div>
+          ${c.mobile ? `<div class="kanban-card-mobile">${escapeHtml(c.mobile)}</div>` : ''}
+          ${fit}
+          ${noteText ? `<div class="kanban-card-note">${escapeHtml(noteText)}</div>` : ''}
+        </div>
+      `;
+    }
+
+    // ---- Full detail modal (reuses the existing candidateCardHTML() untouched) ----
+    let openDetailId = null;
+
+    function candidate_openDetail(id) {
+      openDetailId = id;
+      document.getElementById('detail-modal').hidden = false;
+      renderDetailModal();
+    }
+
+    function candidate_closeDetail() {
+      openDetailId = null;
+      document.getElementById('detail-modal').hidden = true;
+    }
+
+    // Re-renders the open detail modal's body from current data. Called at
+    // the end of candidates_render() so any mutation that triggers a full
+    // board re-render (outcome change, step toggle, delete, add, sync, etc.)
+    // keeps the modal in sync too. candidate_field() deliberately skips
+    // candidates_render() while the user is typing (to keep input focus),
+    // so it deliberately does NOT touch the modal either — same trade-off
+    // the rest of this file already makes.
+    function renderDetailModal() {
+      const modal = document.getElementById('detail-modal');
+      const body = document.getElementById('detail-modal-body');
+      if (!modal || !body || modal.hidden || !openDetailId) return;
+      const item = candidates_get().find(i => i.id === openDetailId);
+      if (!item) { candidate_closeDetail(); return; }
+      body.innerHTML = candidateCardHTML(item);
+    }
+
     function candidates_render() {
-      const list = document.getElementById('pipeline-list');
-      if (!list) return;
+      const board = document.getElementById('kanban-board');
+      if (!board) return;
       const all = candidates_get();
       const q = (document.getElementById('search-box')?.value || '').trim().toLowerCase();
-      const filter = pipelineFilter || 'all';
+      const matchesSearch = c => !q ||
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.mobile || '').toLowerCase().includes(q) ||
+        (c.email || '').toLowerCase().includes(q);
 
-      const filtered = all.filter(c => {
-        const cat = categoryOf(c);
-        const matchesFilter = filter === 'all' || stageOf(cat) === filter;
-        const matchesSearch = !q ||
-          (c.name || '').toLowerCase().includes(q) ||
-          (c.mobile || '').toLowerCase().includes(q) ||
-          (c.email || '').toLowerCase().includes(q);
-        return matchesFilter && matchesSearch;
+      // Each column scrolls independently — preserve scroll position across re-render.
+      const scrollPos = {};
+      KANBAN_COLUMNS.forEach(col => {
+        const el = document.getElementById('kanban-body-' + col.key);
+        if (el) scrollPos[col.key] = el.scrollTop;
       });
 
-      if (!all.length) { list.innerHTML = '<div class="empty">No candidates yet — add the first CV above.</div>'; renderOverview(); return; }
-      if (!filtered.length) { list.innerHTML = '<div class="empty">No candidates match your search or filter.</div>'; renderOverview(); return; }
+      board.innerHTML = KANBAN_COLUMNS.map(col => {
+        const items = all.filter(c => columnOf(c) === col.key && matchesSearch(c));
+        const cardsHTML = items.length
+          ? items.map(candidateTileHTML).join('')
+          : `<div class="kanban-empty"><span class="kanban-empty-icon">📭</span><span>No candidates</span></div>`;
+        return `
+          <div class="kanban-column" style="--col-color:${col.color}">
+            <div class="kanban-column-topbar"></div>
+            <div class="kanban-column-header">
+              <span class="kanban-column-label">${col.label}</span>
+              <span class="kanban-count-badge">${items.length}</span>
+            </div>
+            <div class="kanban-column-body" id="kanban-body-${col.key}"
+              ondragover="kanban_dragOver(event)"
+              ondragleave="kanban_dragLeave(event)"
+              ondrop="kanban_drop(event,'${col.key}')">
+              ${cardsHTML}
+            </div>
+          </div>
+        `;
+      }).join('');
 
-      list.innerHTML = filtered.map(candidateCardHTML).join('');
+      KANBAN_COLUMNS.forEach(col => {
+        const el = document.getElementById('kanban-body-' + col.key);
+        if (el && scrollPos[col.key]) el.scrollTop = scrollPos[col.key];
+      });
+
+      renderDetailModal();
       renderOverview();
     }
 
