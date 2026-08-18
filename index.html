@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Candidate Pipeline</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <!-- Supabase CDN — cross-device sync -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+  <style>
+    /* ===================== TOKENS ===================== */
+    :root {
+      --bg:       #f8fafc;
+      --surface:  #ffffff;
+      --text:     #111827;
+      --label:    #6b7280;
+      --border:   #e5e7eb;
+      --accent:   #b9631f;   /* Mella / SDS brand amber */
+      --green:    #059669;
+      --red:      #ef4444;
+      --amber:    #d97706;
+      --radius:   12px;
+      --font:     'Inter', sans-serif;
+    }
+
+    /* ===================== RESET ===================== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); font-family: var(--font); color: var(--text); font-size: 15px; }
+    button { cursor: pointer; font-family: var(--font); }
+    a { color: var(--accent); }
+    input, select, textarea {
+      font-family: var(--font);
+      font-size: 14px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: var(--surface);
+      color: var(--text);
+      width: 100%;
+      outline: none;
+      transition: border-color .15s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+
+    /* ===================== LAYOUT ===================== */
+    .app {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 0 0 60px;
+      min-height: 100vh;
+    }
+
+    /* ===================== HEADER ===================== */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 18px 12px;
+    }
+    .header-title-wrap { display: flex; align-items: center; gap: 10px; }
+    .header-mark { font-size: 22px; }
+    .header-title { font-size: 18px; font-weight: 700; }
+    .header-sub { font-size: 12px; color: var(--label); }
+    .sync-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #d1d5db;
+      display: inline-block;
+      transition: background .3s;
+      flex-shrink: 0;
+    }
+
+    /* ===================== TABS ===================== */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 0 18px 16px;
+      border-bottom: 1.5px solid var(--border);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab {
+      flex-shrink: 0;
+      padding: 7px 16px;
+      border-radius: 20px;
+      border: 1.5px solid var(--border);
+      background: transparent;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--label);
+      transition: all .15s;
+    }
+    .tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* ===================== SECTIONS ===================== */
+    .main { padding: 20px 18px; }
+    .section { display: none; }
+    .section.active { display: block; }
+    .section-header { margin-bottom: 20px; }
+    .section-header h2 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+    .section-header p { font-size: 13px; color: var(--label); }
+
+    /* ===================== CARDS ===================== */
+    .card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      margin-bottom: 12px;
+    }
+    .card-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--label);
+      margin-bottom: 10px;
+    }
+
+    /* ===================== STAT BOXES ===================== */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .stat-box {
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      text-align: center;
+    }
+    .stat-box .stat-label { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+    .stat-box .stat-value { font-size: 24px; font-weight: 700; }
+    .stat-box.green  { background: #f0fdf4; border: 1.5px solid #a7f3d0; }
+    .stat-box.green  .stat-label { color: #065f46; }
+    .stat-box.green  .stat-value { color: var(--green); }
+    .stat-box.amber  { background: #fef3c7; border: 1.5px solid #fde68a; }
+    .stat-box.amber  .stat-label { color: #92400e; }
+    .stat-box.amber  .stat-value { color: var(--amber); }
+    .stat-box.purple { background: #fdf1e7; border: 1.5px solid #f0c99b; }
+    .stat-box.purple .stat-label { color: #7c4a12; }
+    .stat-box.purple .stat-value { color: var(--accent); }
+    .stat-box.red    { background: #fee2e2; border: 1.5px solid #fca5a5; }
+    .stat-box.red    .stat-label { color: #7f1d1d; }
+    .stat-box.red    .stat-value { color: var(--red); }
+
+    /* ===================== FORM ===================== */
+    .form-block {
+      background: #f9fafb;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      margin-bottom: 20px;
+    }
+    .form-block-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
+    .form-grid { display: grid; gap: 10px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label.field-label { display: block; font-size: 12px; font-weight: 600; color: var(--label); margin-bottom: 4px; }
+    .btn {
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-size: 13px;
+      font-weight: 700;
+      font-family: var(--font);
+      transition: opacity .15s;
+    }
+    .btn:hover { opacity: .85; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-green   { background: var(--green);  color: #fff; }
+    .btn-danger  { background: #fee2e2; color: #b91c1c; }
+    .btn-ghost   { background: #f3f4f6; color: var(--text); }
+    .btn-sm { padding: 5px 10px; font-size: 11px; border-radius: 6px; }
+    .btn-block { width: 100%; }
+
+    /* ===================== BADGES ===================== */
+    .badge {
+      display: inline-block;
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge-green  { background: #d1fae5; color: #065f46; }
+    .badge-amber  { background: #fef3c7; color: #92400e; }
+    .badge-red    { background: #fee2e2; color: #991b1b; }
+    .badge-purple { background: #fdf1e7; color: #7c4a12; }
+    .badge-grey   { background: #f3f4f6; color: #374151; }
+
+    /* ===================== EMPTY STATE ===================== */
+    .empty {
+      text-align: center;
+      padding: 36px 20px;
+      color: var(--label);
+      font-size: 14px;
+    }
+
+    /* ===================== CANDIDATE CARD ===================== */
+    .candidate {
+      display: flex;
+      padding: 0;
+      overflow: hidden;
+    }
+    .candidate-rail { width: 5px; flex: none; background: var(--label); }
+    .candidate-rail.amber, .candidate-rail.purple { background: var(--accent); }
+    .candidate-rail.red { background: var(--red); }
+    .candidate-rail.green { background: var(--green); }
+    .candidate-body { padding: 16px 18px; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+
+    .candidate-head { display: flex; align-items: center; gap: 8px; }
+    .candidate-head input.name-input {
+      font-size: 16px;
+      font-weight: 700;
+      border: none;
+      padding: 4px 2px;
+      flex: 1;
+      min-width: 0;
+    }
+    .candidate-head input.name-input:focus { border-color: transparent; box-shadow: 0 0 0 2px var(--accent); border-radius: 4px; }
+
+    .field-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 12px; }
+    .field-grid-2 .wide { grid-column: 1 / -1; }
+    .mini-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--label); font-weight: 700; margin-bottom: 3px; display: block; }
+    .mini-input { font-size: 13px; padding: 7px 9px; }
+
+    .steps { list-style: none; border-top: 1.5px solid var(--border); }
+    .step { padding: 12px 0; border-bottom: 1.5px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+    .step:last-child { border-bottom: none; padding-bottom: 0; }
+    .step-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .step-num {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: #f3f4f6; color: var(--label);
+      font-size: 11px; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+      flex: none;
+    }
+    .step-title { font-weight: 700; font-size: 13px; flex: 1; min-width: 100px; }
+    .check-label { display: flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--label); }
+    .check-label input { width: auto; accent-color: var(--green); }
+    .mini-date { width: 128px; font-size: 12px; padding: 4px 6px; }
+
+    .outcome-row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .radio-label { display: flex; align-items: center; gap: 4px; font-size: 13px; }
+    .radio-label input { width: auto; accent-color: var(--accent); }
+
+    .start-fields { display: flex; gap: 10px; padding: 10px; background: #f0fdf4; border-radius: 8px; }
+    .start-fields[hidden] { display: none; }
+
+    .candidate[data-outcome="not-interested"] .step[data-step="3"],
+    .candidate[data-outcome="not-interested"] .step[data-step="4"] { opacity: .45; }
+
+    .msg-preview {
+      font-size: 12px;
+      color: var(--label);
+      background: #f9fafb;
+      border-radius: 7px;
+      padding: 8px 10px;
+      white-space: pre-wrap;
+      max-height: 90px;
+      overflow-y: auto;
+    }
+
+    /* ===================== TOAST / MODAL ===================== */
+    .toast {
+      position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+      background: var(--text); color: #fff;
+      padding: 10px 18px; border-radius: 999px;
+      font-size: 13px; font-weight: 700;
+      box-shadow: 0 4px 14px rgba(0,0,0,.2);
+      z-index: 50;
+    }
+    .toast[hidden] { display: none; }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(17,24,39,.45);
+      display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 60;
+    }
+    .modal-backdrop[hidden] { display: none; }
+    .modal { background: #fff; border-radius: 12px; padding: 20px; max-width: 460px; width: 100%; display: flex; flex-direction: column; gap: 12px; }
+    .modal h3 { font-size: 16px; }
+    .modal p { font-size: 13px; color: var(--label); }
+    .modal textarea { min-height: 180px; font-size: 13px; resize: vertical; }
+    .modal-actions { display: flex; justify-content: flex-end; }
+
+    /* ===================== MOBILE ===================== */
+    @media (max-width: 480px) {
+      .form-row, .field-grid-2 { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+
+    <!-- HEADER -->
+    <div class="header">
+      <div class="header-title-wrap">
+        <span class="header-mark">📋</span>
+        <div>
+          <div class="header-title">Candidate Pipeline</div>
+          <div class="header-sub">Mella Recruitment → SDS Limited</div>
+        </div>
+      </div>
+      <span id="sync-dot" class="sync-dot" title="Sync status"></span>
+    </div>
+
+    <!-- TAB BAR -->
+    <div class="tabs">
+      <button class="tab active" onclick="showTab('overview', this)">Overview</button>
+      <button class="tab" onclick="showTab('pipeline', this); candidates_render()">Pipeline</button>
+    </div>
+
+    <!-- SECTIONS -->
+    <div class="main">
+
+      <!-- ===== OVERVIEW ===== -->
+      <div id="overview" class="section active">
+        <div class="section-header">
+          <h2>Overview</h2>
+          <p>Where every candidate stands right now</p>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-box amber">
+            <div class="stat-label">Awaiting Call</div>
+            <div class="stat-value" id="ov-awaiting">0</div>
+          </div>
+          <div class="stat-box purple">
+            <div class="stat-label">Interested</div>
+            <div class="stat-value" id="ov-interested">0</div>
+          </div>
+          <div class="stat-box green">
+            <div class="stat-label">Start Confirmed</div>
+            <div class="stat-value" id="ov-confirmed">0</div>
+          </div>
+          <div class="stat-box red">
+            <div class="stat-label">Not Interested</div>
+            <div class="stat-value" id="ov-notinterested">0</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Recently added</div>
+          <div id="ov-recent"><div class="empty">No candidates yet</div></div>
+        </div>
+      </div>
+
+      <!-- ===== PIPELINE ===== -->
+      <div id="pipeline" class="section">
+        <div class="section-header">
+          <h2>Pipeline</h2>
+          <p>Add a CV, then work each candidate through the four steps</p>
+        </div>
+
+        <!-- Add form -->
+        <div class="form-block">
+          <div class="form-block-title">Add candidate (CV received)</div>
+          <div class="form-grid">
+            <div>
+              <label class="field-label">Name</label>
+              <input type="text" id="new-name" placeholder="Candidate name" />
+            </div>
+            <div class="form-row">
+              <div>
+                <label class="field-label">Mobile</label>
+                <input type="tel" id="new-mobile" placeholder="07…" />
+              </div>
+              <div>
+                <label class="field-label">Email</label>
+                <input type="email" id="new-email" placeholder="name@example.com" />
+              </div>
+            </div>
+            <div>
+              <label class="field-label">CV location (optional)</label>
+              <input type="text" id="new-cvlocation" placeholder="e.g. OneDrive / CVs / Smith_J.pdf" />
+            </div>
+            <button class="btn btn-primary btn-block" onclick="candidates_add()">+ Add candidate</button>
+          </div>
+        </div>
+
+        <!-- Search / filter -->
+        <div class="form-row" style="margin-bottom:16px;">
+          <input type="search" id="search-box" placeholder="Search name, mobile, email…" oninput="candidates_render()" />
+          <select id="filter-select" onchange="candidates_render()">
+            <option value="all">All statuses</option>
+            <option value="awaiting-contact">Awaiting contact</option>
+            <option value="awaiting-call">Message sent — awaiting call</option>
+            <option value="not-interested">Not interested</option>
+            <option value="interested">Interested</option>
+            <option value="confirmed">Start confirmed</option>
+            <option value="started">Reminder sent</option>
+          </select>
+        </div>
+
+        <!-- Candidate list -->
+        <div id="pipeline-list"></div>
+      </div>
+
+    </div><!-- /main -->
+  </div><!-- /app -->
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <div class="modal-backdrop" id="copy-modal" hidden>
+    <div class="modal">
+      <h3>Copy this message</h3>
+      <p>Clipboard access was blocked — select the text below and copy it manually (Ctrl/Cmd+C).</p>
+      <textarea id="copy-modal-text" readonly></textarea>
+      <div class="modal-actions">
+        <button class="btn btn-primary" onclick="document.getElementById('copy-modal').hidden = true;">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* ============================================================
+       SUPABASE SETUP
+       1. Create a free project at supabase.com
+       2. Create table: hub_data (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ)
+       3. Enable Realtime on the hub_data table
+       4. Paste your URL and anon key below
+    ============================================================ */
+    const SUPABASE_URL      = 'YOUR_SUPABASE_URL';
+    const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+    const sb = (SUPABASE_URL !== 'YOUR_SUPABASE_URL')
+      ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+      : null;
+
+    /* ============================================================
+       NAVIGATION
+    ============================================================ */
+    function showTab(id, btn) {
+      document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.getElementById(id)?.classList.add('active');
+      btn?.classList.add('active');
+    }
+
+    /* ============================================================
+       SYNC DOT
+    ============================================================ */
+    function setSyncDot(ok) {
+      const dot = document.getElementById('sync-dot');
+      if (dot) { dot.style.background = ok ? '#059669' : '#ef4444'; }
+    }
+
+    /* ============================================================
+       UTILITY
+    ============================================================ */
+    function newId() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    }
+
+    function fmtDate(iso) {
+      if (!iso) return '';
+      return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
+    function todayISO() {
+      const d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function ordinal(n) {
+      const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+      return n + (s[(v - 20) % 10] || s[v] || s[0]);
+    }
+
+    function formatStart(dateStr, timeStr) {
+      if (!dateStr) return '[insert date and time]';
+      const d = new Date(dateStr + 'T00:00:00');
+      const weekday = d.toLocaleDateString('en-GB', { weekday: 'long' });
+      const day = ordinal(d.getDate());
+      const month = d.toLocaleDateString('en-GB', { month: 'long' });
+      const year = d.getFullYear();
+      let timePart = '';
+      if (timeStr) {
+        const [h, m] = timeStr.split(':').map(Number);
+        const ampm = h >= 12 ? 'pm' : 'am';
+        let h12 = h % 12; if (h12 === 0) h12 = 12;
+        timePart = ' at ' + h12 + (m ? ':' + String(m).padStart(2, '0') : '') + ampm;
+      }
+      return weekday + ' ' + day + ' ' + month + ' ' + year + timePart;
+    }
+
+    const TEMPLATES = {
+      '1': function () {
+        return 'Hi - I have come across your CV online and I am keen to speak to you about a couple of roles I am recruiting for.\n\nWould there be a good time to call? Thanks Harry - Mella Recruitment';
+      },
+      '3': function (c) {
+        return 'Hi,\n' +
+          'As promised, I am pleased to confirm your forthcoming start date with SDS.\n' +
+          formatStart(c.startDate, c.startTime) + ' at the below site;\n\n' +
+          'SDS Limited – Sustainable Drainage Systems\n' +
+          'Unit 4 Evercreech Way\n' +
+          'Highbridge\n' +
+          'TA9 4AR\n\n' +
+          'Please ask for Craig when you arrive. Please wear warehouse appropriate clothing and you will be given PPE on site.\n\n' +
+          'Useful Pages;\n' +
+          'About - SDS (sdslimited.com) - https://www.sdslimited.com/about/\n\n' +
+          'Craig will get you inducted into the warehouse and up and running. Please say Patrick has sent you in.\n\n' +
+          'Good luck, I think you are going to get on well.';
+      },
+      '4': function (c) {
+        return 'Just checking in to make sure you are all set for your first shift on ' +
+          formatStart(c.startDate, c.startTime) + '? Any questions let me know – if not wishing you all the best of luck.';
+      }
+    };
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.hidden = false;
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => { toast.hidden = true; }, 2600);
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showToast('Message copied to clipboard')).catch(() => openCopyModal(text));
+      } else {
+        openCopyModal(text);
+      }
+    }
+
+    function openCopyModal(text) {
+      const modal = document.getElementById('copy-modal');
+      const ta = document.getElementById('copy-modal-text');
+      ta.value = text;
+      modal.hidden = false;
+      ta.focus();
+      ta.select();
+    }
+
+    /* ============================================================
+       FEATURE: CANDIDATES
+       Data shape: [{ id, name, mobile, email, cvDate, cvLocation,
+                       s1Done, s1Date, outcome, notes,
+                       startDate, startTime, s3Done, s3Date,
+                       s4Done, s4Date, createdAt }]
+    ============================================================ */
+    const CANDIDATES_KEY = 'mella_candidates';
+
+    function candidates_get() {
+      try { return JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]'); } catch { return []; }
+    }
+
+    function candidates_save(items) {
+      localStorage.setItem(CANDIDATES_KEY, JSON.stringify(items));
+      if (sb) sb.from('hub_data')
+        .upsert({ key: CANDIDATES_KEY, value: items, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+        .then(() => {});
+    }
+
+    function candidates_add() {
+      const name = (document.getElementById('new-name')?.value || '').trim();
+      const mobile = (document.getElementById('new-mobile')?.value || '').trim();
+      const email = (document.getElementById('new-email')?.value || '').trim();
+      const cvLocation = (document.getElementById('new-cvlocation')?.value || '').trim();
+      if (!name) { alert('Please enter a candidate name.'); return; }
+
+      const items = candidates_get();
+      items.unshift({
+        id: newId(), name, mobile, email,
+        cvDate: todayISO(), cvLocation,
+        s1Done: false, s1Date: '',
+        outcome: 'pending', notes: '',
+        startDate: '', startTime: '',
+        s3Done: false, s3Date: '',
+        s4Done: false, s4Date: '',
+        createdAt: new Date().toISOString()
+      });
+      candidates_save(items);
+
+      document.getElementById('new-name').value = '';
+      document.getElementById('new-mobile').value = '';
+      document.getElementById('new-email').value = '';
+      document.getElementById('new-cvlocation').value = '';
+
+      candidates_render();
+    }
+
+    // Persist a single field without a full re-render (keeps input focus while typing)
+    function candidate_field(id, field, value) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      item[field] = value;
+      candidates_save(items);
+
+      if (field === 'startDate' || field === 'startTime') {
+        const p3 = document.getElementById('preview3-' + id);
+        const p4 = document.getElementById('preview4-' + id);
+        if (p3) p3.textContent = TEMPLATES['3'](item);
+        if (p4) p4.textContent = TEMPLATES['4'](item);
+      }
+    }
+
+    function candidate_setOutcome(id, value) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      item.outcome = value;
+      candidates_save(items);
+      candidates_render();
+    }
+
+    function candidate_toggleDone(id, stepKey, checked) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      item[stepKey + 'Done'] = checked;
+      if (checked && !item[stepKey + 'Date']) item[stepKey + 'Date'] = todayISO();
+      candidates_save(items);
+      candidates_render();
+    }
+
+    function candidate_copy(id, tpl) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      copyText(TEMPLATES[tpl](item));
+      const stepKey = 's' + tpl;
+      if (!item[stepKey + 'Done']) {
+        item[stepKey + 'Done'] = true;
+        if (!item[stepKey + 'Date']) item[stepKey + 'Date'] = todayISO();
+        candidates_save(items);
+        candidates_render();
+      }
+    }
+
+    function candidate_delete(id) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!confirm('Remove ' + (item ? item.name || 'this candidate' : 'this candidate') + ' from the pipeline?')) return;
+      candidates_save(items.filter(i => i.id !== id));
+      candidates_render();
+    }
+
+    const CATEGORY_META = {
+      'awaiting-contact': { label: 'Awaiting contact', badge: 'badge-grey', rail: '' },
+      'awaiting-call':    { label: 'Message sent — awaiting call', badge: 'badge-purple', rail: 'amber' },
+      'not-interested':   { label: 'Not interested', badge: 'badge-red', rail: 'red' },
+      'interested':       { label: 'Interested — awaiting start', badge: 'badge-purple', rail: 'purple' },
+      'confirmed':        { label: 'Start confirmed', badge: 'badge-green', rail: 'green' },
+      'started':          { label: 'Reminder sent', badge: 'badge-green', rail: 'green' }
+    };
+
+    function categoryOf(c) {
+      if (c.s4Done) return 'started';
+      if (c.s3Done) return 'confirmed';
+      if (c.outcome === 'interested') return 'interested';
+      if (c.outcome === 'not-interested') return 'not-interested';
+      if (c.s1Done) return 'awaiting-call';
+      return 'awaiting-contact';
+    }
+
+    function escapeHtml(s) {
+      return String(s || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
+    function candidateCardHTML(c) {
+      const cat = categoryOf(c);
+      const meta = CATEGORY_META[cat];
+      return `
+        <div class="card candidate" data-outcome="${c.outcome}">
+          <div class="candidate-rail ${meta.rail}"></div>
+          <div class="candidate-body">
+            <div class="candidate-head">
+              <input class="name-input" value="${escapeHtml(c.name)}" placeholder="Candidate name"
+                oninput="candidate_field('${c.id}','name',this.value)">
+              <span class="badge ${meta.badge}">${meta.label}</span>
+              <button class="btn btn-danger btn-sm" onclick="candidate_delete('${c.id}')">✕</button>
+            </div>
+
+            <div class="field-grid-2">
+              <div>
+                <label class="mini-label">Mobile</label>
+                <input class="mini-input" type="tel" value="${escapeHtml(c.mobile)}" placeholder="07…"
+                  oninput="candidate_field('${c.id}','mobile',this.value)">
+              </div>
+              <div>
+                <label class="mini-label">Email</label>
+                <input class="mini-input" type="email" value="${escapeHtml(c.email)}" placeholder="name@example.com"
+                  oninput="candidate_field('${c.id}','email',this.value)">
+              </div>
+              <div>
+                <label class="mini-label">CV uploaded</label>
+                <input class="mini-input" type="date" value="${c.cvDate || ''}"
+                  oninput="candidate_field('${c.id}','cvDate',this.value)">
+              </div>
+              <div class="wide">
+                <label class="mini-label">CV location</label>
+                <input class="mini-input" type="text" value="${escapeHtml(c.cvLocation)}" placeholder="e.g. OneDrive / CVs / Smith_J.pdf"
+                  oninput="candidate_field('${c.id}','cvLocation',this.value)">
+              </div>
+            </div>
+
+            <ol class="steps">
+              <li class="step" data-step="1">
+                <div class="step-head">
+                  <span class="step-num">1</span>
+                  <span class="step-title">Send intro message</span>
+                  <label class="check-label"><input type="checkbox" ${c.s1Done ? 'checked' : ''}
+                    onchange="candidate_toggleDone('${c.id}','s1',this.checked)"> Sent</label>
+                  <input class="mini-date" type="date" value="${c.s1Date || ''}"
+                    oninput="candidate_field('${c.id}','s1Date',this.value)">
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="candidate_copy('${c.id}','1')">Copy message</button>
+              </li>
+
+              <li class="step" data-step="2">
+                <div class="step-head">
+                  <span class="step-num">2</span>
+                  <span class="step-title">Call &amp; outcome</span>
+                </div>
+                <div class="outcome-row">
+                  <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="pending" ${c.outcome === 'pending' ? 'checked' : ''}
+                    onchange="candidate_setOutcome('${c.id}','pending')"> Pending</label>
+                  <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="not-interested" ${c.outcome === 'not-interested' ? 'checked' : ''}
+                    onchange="candidate_setOutcome('${c.id}','not-interested')"> Not interested</label>
+                  <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="interested" ${c.outcome === 'interested' ? 'checked' : ''}
+                    onchange="candidate_setOutcome('${c.id}','interested')"> Interested</label>
+                </div>
+                <div>
+                  <label class="mini-label">Call notes</label>
+                  <input class="mini-input" type="text" value="${escapeHtml(c.notes)}" placeholder="e.g. left voicemail, will call back Thurs"
+                    oninput="candidate_field('${c.id}','notes',this.value)">
+                </div>
+                <div class="start-fields" ${c.outcome === 'interested' ? '' : 'hidden'}>
+                  <div>
+                    <label class="mini-label">Start date</label>
+                    <input class="mini-input" type="date" value="${c.startDate || ''}"
+                      oninput="candidate_field('${c.id}','startDate',this.value)">
+                  </div>
+                  <div>
+                    <label class="mini-label">Start time</label>
+                    <input class="mini-input" type="time" value="${c.startTime || ''}"
+                      oninput="candidate_field('${c.id}','startTime',this.value)">
+                  </div>
+                </div>
+              </li>
+
+              <li class="step" data-step="3">
+                <div class="step-head">
+                  <span class="step-num">3</span>
+                  <span class="step-title">Send start confirmation</span>
+                  <label class="check-label"><input type="checkbox" ${c.s3Done ? 'checked' : ''}
+                    onchange="candidate_toggleDone('${c.id}','s3',this.checked)"> Sent</label>
+                  <input class="mini-date" type="date" value="${c.s3Date || ''}"
+                    oninput="candidate_field('${c.id}','s3Date',this.value)">
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="candidate_copy('${c.id}','3')">Copy message</button>
+                <div class="msg-preview" id="preview3-${c.id}">${escapeHtml(TEMPLATES['3'](c))}</div>
+              </li>
+
+              <li class="step" data-step="4">
+                <div class="step-head">
+                  <span class="step-num">4</span>
+                  <span class="step-title">Day-before check-in</span>
+                  <label class="check-label"><input type="checkbox" ${c.s4Done ? 'checked' : ''}
+                    onchange="candidate_toggleDone('${c.id}','s4',this.checked)"> Sent</label>
+                  <input class="mini-date" type="date" value="${c.s4Date || ''}"
+                    oninput="candidate_field('${c.id}','s4Date',this.value)">
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="candidate_copy('${c.id}','4')">Copy message</button>
+                <div class="msg-preview" id="preview4-${c.id}">${escapeHtml(TEMPLATES['4'](c))}</div>
+              </li>
+            </ol>
+          </div>
+        </div>
+      `;
+    }
+
+    function candidates_render() {
+      const list = document.getElementById('pipeline-list');
+      if (!list) return;
+      const all = candidates_get();
+      const q = (document.getElementById('search-box')?.value || '').trim().toLowerCase();
+      const filter = document.getElementById('filter-select')?.value || 'all';
+
+      const filtered = all.filter(c => {
+        const cat = categoryOf(c);
+        const matchesFilter = filter === 'all' || cat === filter;
+        const matchesSearch = !q ||
+          (c.name || '').toLowerCase().includes(q) ||
+          (c.mobile || '').toLowerCase().includes(q) ||
+          (c.email || '').toLowerCase().includes(q);
+        return matchesFilter && matchesSearch;
+      });
+
+      if (!all.length) { list.innerHTML = '<div class="empty">No candidates yet — add the first CV above.</div>'; renderOverview(); return; }
+      if (!filtered.length) { list.innerHTML = '<div class="empty">No candidates match your search or filter.</div>'; renderOverview(); return; }
+
+      list.innerHTML = filtered.map(candidateCardHTML).join('');
+      renderOverview();
+    }
+
+    /* ============================================================
+       OVERVIEW RENDER
+    ============================================================ */
+    function renderOverview() {
+      const items = candidates_get();
+      const counts = { awaiting: 0, interested: 0, confirmed: 0, notInterested: 0 };
+      items.forEach(c => {
+        const cat = categoryOf(c);
+        if (cat === 'awaiting-contact' || cat === 'awaiting-call') counts.awaiting++;
+        if (cat === 'interested') counts.interested++;
+        if (cat === 'confirmed' || cat === 'started') counts.confirmed++;
+        if (cat === 'not-interested') counts.notInterested++;
+      });
+
+      document.getElementById('ov-awaiting').textContent = counts.awaiting;
+      document.getElementById('ov-interested').textContent = counts.interested;
+      document.getElementById('ov-confirmed').textContent = counts.confirmed;
+      document.getElementById('ov-notinterested').textContent = counts.notInterested;
+
+      const recent = document.getElementById('ov-recent');
+      if (!recent) return;
+      if (!items.length) { recent.innerHTML = '<div class="empty">No candidates yet</div>'; return; }
+      const sorted = [...items].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      recent.innerHTML = sorted.slice(0, 5).map(c => {
+        const meta = CATEGORY_META[categoryOf(c)];
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+            <span style="font-size:13px;font-weight:600;">${escapeHtml(c.name) || '(no name)'}</span>
+            <span class="badge ${meta.badge}">${meta.label}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    /* ============================================================
+       SUPABASE SYNC
+    ============================================================ */
+    let syncSubscribed = false;
+
+    async function fetchRemote() {
+      if (!sb) return;
+      const keys = [CANDIDATES_KEY];
+      const { data: rows, error } = await sb.from('hub_data').select('key, value').in('key', keys);
+      if (error || !rows) { setSyncDot(false); return; }
+
+      for (const row of rows) {
+        const remote = row.value;
+        const local = localStorage.getItem(row.key);
+        const isEmpty = remote === null || remote === undefined || (Array.isArray(remote) ? remote.length === 0 : remote === '');
+        const hasLocal = local && local !== '[]' && local !== '';
+        if (isEmpty && hasLocal) {
+          await sb.from('hub_data').upsert({ key: row.key, value: JSON.parse(local), updated_at: new Date().toISOString() });
+        } else if (!isEmpty) {
+          localStorage.setItem(row.key, typeof remote === 'string' ? remote : JSON.stringify(remote));
+        }
+      }
+      setSyncDot(true);
+      renderAll();
+    }
+
+    function initSync() {
+      fetchRemote();
+      if (!syncSubscribed) {
+        syncSubscribed = true;
+        if (!sb) return;
+        sb.channel('dash_sync')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'hub_data' }, payload => {
+            const { key, value } = payload.new || {};
+            if (!key) return;
+            localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+            renderAll();
+          })
+          .subscribe(status => setSyncDot(status === 'SUBSCRIBED'));
+      }
+    }
+
+    /* ============================================================
+       RENDER ALL — call this after any remote data update
+    ============================================================ */
+    function renderAll() {
+      candidates_render();
+    }
+
+    /* ============================================================
+       INIT
+    ============================================================ */
+    document.addEventListener('DOMContentLoaded', () => {
+      renderAll();
+      initSync();
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && sb) fetchRemote();
+      });
+    });
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js');
+    }
+  </script>
+</body>
+</html>
