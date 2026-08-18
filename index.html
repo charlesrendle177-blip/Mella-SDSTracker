@@ -500,6 +500,60 @@
     .vault-row:hover { background: var(--surface-2); }
     .vault-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
+    /* ===================== ATTENDANCE — STARTER CARDS ===================== */
+    .starters-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .starter-card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      cursor: pointer;
+      transition: box-shadow .15s;
+    }
+    .starter-card:hover { box-shadow: 0 2px 6px rgba(30,24,4,.09), 0 10px 22px rgba(30,24,4,.1); }
+    .starter-card-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; }
+    .starter-card-meta { font-size: 12.5px; color: var(--label); }
+    .starter-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+    .starter-countdown {
+      text-align: center;
+      padding: 10px 8px;
+      border-radius: 10px;
+      background: var(--surface-2);
+    }
+    .starter-countdown-num {
+      display: block;
+      font-family: var(--font-display);
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .starter-countdown-label {
+      display: block;
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      font-weight: 700;
+      color: var(--label);
+      margin-top: 3px;
+    }
+    .starter-countdown.future .starter-countdown-num { color: var(--accent-ink); }
+    .starter-countdown.today { background: #dcf0e3; }
+    .starter-countdown.today .starter-countdown-num,
+    .starter-countdown.today .starter-countdown-label { color: #205a3c; }
+    .starter-countdown.overdue { background: #fbeae6; }
+    .starter-countdown.overdue .starter-countdown-num,
+    .starter-countdown.overdue .starter-countdown-label { color: #8a2f1f; }
+    .starter-countdown.neutral .starter-countdown-num { color: var(--label); }
+
     /* ===================== TOAST / MODAL ===================== */
     .toast {
       position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
@@ -1022,7 +1076,18 @@
     const CANDIDATES_KEY = 'mella_candidates';
 
     function candidates_get() {
-      try { return JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]'); } catch { return []; }
+      try {
+        const items = JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]');
+        // Records saved before a field existed (e.g. attendance, added after
+        // some candidates were already imported) simply don't have the key at
+        // all — normalize here so every reader can safely assume it's always
+        // at least '', rather than patching every read site individually.
+        items.forEach(c => {
+          if (c.attendance === undefined) c.attendance = '';
+          if (c.attendanceDate === undefined) c.attendanceDate = '';
+        });
+        return items;
+      } catch { return []; }
     }
 
     // The localStorage write is synchronous and immediate — it's always
@@ -2221,7 +2286,7 @@
             rows.push({ id: c.id, name: c.name, urgent: false, reason: 'Start reminder due tomorrow' });
           }
         }
-        if (c.outcome === 'booked' && c.attendance === '' && c.startDate && c.startDate <= today) {
+        if (c.outcome === 'booked' && !c.attendance && c.startDate && c.startDate <= today) {
           rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Attendance not confirmed' });
         }
       });
@@ -2425,7 +2490,7 @@
 
       // ---- Needs checking ----
       const needsChecking = active
-        .filter(c => c.outcome === 'booked' && c.attendance === '' && c.startDate && c.startDate <= today)
+        .filter(c => c.outcome === 'booked' && !c.attendance && c.startDate && c.startDate <= today)
         .sort((a, b) => (a.startDate + (a.startTime || '')).localeCompare(b.startDate + (b.startTime || '')));
 
       if (!needsChecking.length) {
@@ -2447,7 +2512,7 @@
         `;
       }
 
-      // ---- All starters (searchable table, Vault-table visual pattern) ----
+      // ---- All starters (card grid, one per booked candidate) ----
       const q = (document.getElementById('attendance-search-box')?.value || '').trim().toLowerCase();
       const starters = active.filter(c => c.outcome === 'booked' && (!q ||
         (c.name || '').toLowerCase().includes(q) ||
@@ -2464,28 +2529,40 @@
       // Soonest start first; candidates with no start date set yet sort last.
       const sorted = [...starters].sort((a, b) => (a.startDate || '9999-99-99').localeCompare(b.startDate || '9999-99-99'));
 
-      list.innerHTML = `
-        <div class="vault-table-wrap">
-          <table class="vault-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Mobile</th>
-                <th>Start</th>
-                <th>Attendance</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${sorted.map(c => `
-                <tr class="vault-row" onclick="candidate_openDetail('${c.id}')">
-                  <td>${escapeHtml(c.name) || '(no name)'}</td>
-                  <td>${escapeHtml(c.mobile)}</td>
-                  <td>${escapeHtml(formatStart(c.startDate, c.startTime))}</td>
-                  <td><span class="badge ${ATTENDANCE_META[c.attendance].badge}">${ATTENDANCE_META[c.attendance].label}</span></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
+      list.innerHTML = `<div class="starters-grid">${sorted.map(c => starterCardHTML(c)).join('')}</div>`;
+    }
+
+    // A blatant, glanceable "how many days until their first shift" figure —
+    // the whole point being Harry can see at a glance who's coming up without
+    // opening anything. Pending/Showed/No-show sits right under the name,
+    // same badge used everywhere else in the app.
+    function starterCountdownHTML(c, today) {
+      if (!c.startDate) {
+        return `<div class="starter-countdown neutral"><span class="starter-countdown-num">—</span><span class="starter-countdown-label">No start date set</span></div>`;
+      }
+      const diff = daysBetweenISO(today, c.startDate); // startDate − today, in days
+      if (diff > 1) return `<div class="starter-countdown future"><span class="starter-countdown-num">${diff}</span><span class="starter-countdown-label">days to go</span></div>`;
+      if (diff === 1) return `<div class="starter-countdown future"><span class="starter-countdown-num">1</span><span class="starter-countdown-label">day to go — tomorrow</span></div>`;
+      if (diff === 0) return `<div class="starter-countdown today"><span class="starter-countdown-num">0</span><span class="starter-countdown-label">Starting today</span></div>`;
+      const daysAgo = Math.abs(diff);
+      return `<div class="starter-countdown overdue"><span class="starter-countdown-num">${daysAgo}</span><span class="starter-countdown-label">day${daysAgo === 1 ? '' : 's'} since shift</span></div>`;
+    }
+
+    function starterCardHTML(c) {
+      const meta = ATTENDANCE_META[c.attendance || '']; // pre-existing candidates from before this feature have no attendance field at all (undefined, not '')
+      const today = todayISO();
+      return `
+        <div class="starter-card" onclick="candidate_openDetail('${c.id}')">
+          <div class="starter-card-name">${escapeHtml(c.name) || '(no name)'}</div>
+          <span class="badge ${meta.badge}" style="align-self:flex-start;">${meta.label}</span>
+          <div class="starter-card-meta">${escapeHtml(c.mobile)}${c.mobile ? ' · ' : ''}${escapeHtml(formatStart(c.startDate, c.startTime))}</div>
+          ${starterCountdownHTML(c, today)}
+          ${!c.attendance ? `
+            <div class="starter-card-actions">
+              <button class="btn btn-green btn-sm" onclick="event.stopPropagation(); candidate_setAttendance('${c.id}','showed')">✓ Showed up</button>
+              <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); candidate_setAttendance('${c.id}','no-show')">✗ No show</button>
+            </div>
+          ` : ''}
         </div>
       `;
     }
