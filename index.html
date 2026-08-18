@@ -63,21 +63,31 @@
     }
     input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 
-    /* ===================== LAYOUT ===================== */
-    .app {
-      max-width: 720px;
-      margin: 0 auto;
-      padding: 0 0 60px;
-      min-height: 100vh;
-    }
-
-    /* ===================== HEADER ===================== */
-    .header {
+    /* ===================== SHELL / SIDEBAR ===================== */
+    .shell { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 240px;
+      flex: none;
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 20px 18px 12px;
+      flex-direction: column;
+      gap: 22px;
+      padding: 22px 16px;
+      background: var(--surface-2);
+      border-right: 1.5px solid var(--border);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
     }
+    .sidebar-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+    .sidebar-footer {
+      display: flex; align-items: center; gap: 8px;
+      padding-top: 14px; border-top: 1.5px solid var(--border);
+      font-size: 12px; color: var(--label); font-weight: 600;
+    }
+    .content { flex: 1; min-width: 0; }
+
+    /* ===================== HEADER (brand lockup, top of sidebar) ===================== */
     .header-title-wrap { display: flex; align-items: center; gap: 12px; }
     .header-mark {
       font-family: var(--font-display);
@@ -102,35 +112,33 @@
       flex-shrink: 0;
     }
 
-    /* ===================== TABS ===================== */
-    .tabs {
-      display: flex;
-      gap: 4px;
-      padding: 0 18px 16px;
-      border-bottom: 1.5px solid var(--border);
-      overflow-x: auto;
-      scrollbar-width: none;
-    }
-    .tabs::-webkit-scrollbar { display: none; }
+    /* ===================== NAV TABS (vertical in sidebar, horizontal when collapsed) ===================== */
     .tab {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
       flex-shrink: 0;
-      padding: 7px 16px;
-      border-radius: 20px;
-      border: 1.5px solid var(--border);
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1.5px solid transparent;
       background: transparent;
-      font-size: 13px;
+      font-size: 13.5px;
       font-weight: 600;
       color: var(--label);
+      text-align: left;
       transition: all .15s;
     }
+    .tab:hover:not(.active) { background: var(--surface); border-color: var(--border); }
     .tab.active {
       background: var(--accent);
       border-color: var(--accent);
       color: var(--text);
     }
+    .nav-icon { font-size: 15px; flex: none; width: 18px; text-align: center; }
 
     /* ===================== SECTIONS ===================== */
-    .main { padding: 20px 18px; }
+    .main { max-width: 1120px; padding: 28px 36px 60px; }
     .section { display: none; }
     .section.active { display: block; }
     .section-header { margin-bottom: 20px; }
@@ -159,8 +167,11 @@
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
-      margin-bottom: 20px;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    @media (min-width: 700px) {
+      .stats-grid { grid-template-columns: repeat(4, 1fr); }
     }
     .stat-box {
       border-radius: var(--radius);
@@ -300,9 +311,9 @@
       align-items: flex-start;
       overflow-x: auto;
       padding-bottom: 10px;
-      margin: 0 -18px;
-      padding-left: 18px;
-      padding-right: 18px;
+      margin: 0 -36px;
+      padding-left: 36px;
+      padding-right: 36px;
     }
     .kanban-column {
       flex: 0 0 260px;
@@ -463,19 +474,50 @@
     .modal textarea { min-height: 180px; font-size: 13px; resize: vertical; }
     .modal-actions { display: flex; justify-content: flex-end; }
 
+    /* ===================== COLLAPSE SIDEBAR → TOP BAR ===================== */
+    @media (max-width: 840px) {
+      .shell { flex-direction: column; }
+      .sidebar {
+        width: 100%;
+        height: auto;
+        position: static;
+        flex-direction: row;
+        align-items: center;
+        padding: 14px 18px;
+        gap: 14px;
+        border-right: none;
+        border-bottom: 1.5px solid var(--border);
+        overflow-y: visible;
+      }
+      .header-title-wrap { flex: 1; }
+      .sidebar-nav {
+        flex: none;
+        flex-direction: row;
+        gap: 6px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .sidebar-nav::-webkit-scrollbar { display: none; }
+      .sidebar-nav .tab { width: auto; white-space: nowrap; border-radius: 20px; }
+      .sidebar-footer { border-top: none; padding-top: 0; }
+      .main { max-width: none; padding: 20px 18px 60px; }
+      .kanban-board { margin: 0 -18px; padding-left: 18px; padding-right: 18px; }
+    }
+
     /* ===================== MOBILE ===================== */
     @media (max-width: 480px) {
       .form-row, .field-grid-2 { grid-template-columns: 1fr; }
       .stats-grid { grid-template-columns: 1fr 1fr; }
+      .header-sub, .header-squiggle { display: none; }
     }
   </style>
 </head>
 
 <body>
-  <div class="app">
+  <div class="shell">
 
-    <!-- HEADER -->
-    <div class="header">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
       <div class="header-title-wrap">
         <span class="header-mark" aria-hidden="true">M</span>
         <div>
@@ -486,18 +528,21 @@
           </svg>
         </div>
       </div>
-      <span id="sync-dot" class="sync-dot" title="Sync status"></span>
-    </div>
 
-    <!-- TAB BAR -->
-    <div class="tabs">
-      <button class="tab active" onclick="showTab('overview', this)">Overview</button>
-      <button class="tab" onclick="showTab('pipeline', this); candidates_render()">Pipeline</button>
-      <button class="tab" onclick="showTab('upload', this)">Upload CVs</button>
-    </div>
+      <nav class="sidebar-nav">
+        <button class="tab active" onclick="showTab('overview', this)"><span class="nav-icon">◎</span> Overview</button>
+        <button class="tab" onclick="showTab('pipeline', this); candidates_render()"><span class="nav-icon">▤</span> Pipeline</button>
+        <button class="tab" onclick="showTab('upload', this)"><span class="nav-icon">⇪</span> Upload CVs</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span id="sync-dot" class="sync-dot" title="Sync status"></span>
+        <span>SDS Limited</span>
+      </div>
+    </aside>
 
     <!-- SECTIONS -->
-    <div class="main">
+    <div class="content"><div class="main">
 
       <!-- ===== OVERVIEW ===== -->
       <div id="overview" class="section active">
@@ -604,8 +649,8 @@
         <div id="cv-empty" class="empty">No CVs processed yet — choose PDF files above and hit "Process CVs".</div>
       </div>
 
-    </div><!-- /main -->
-  </div><!-- /app -->
+    </div></div><!-- /main /content -->
+  </div><!-- /shell -->
 
   <div class="toast" id="toast" role="status" hidden></div>
 
