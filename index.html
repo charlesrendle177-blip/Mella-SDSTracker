@@ -163,6 +163,25 @@
       margin-bottom: 10px;
     }
 
+    /* ===================== NEEDS ACTION TODAY (Overview) ===================== */
+    .needs-action-card { border-left: 4px solid var(--red); padding-left: 16px; }
+    .needs-action-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .needs-action-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .needs-action-row:hover { background: var(--surface-2); }
+    .needs-action-name { font-size: 13px; font-weight: 600; }
+
+    /* ===================== CONVERSION STAT LINE (Overview) ===================== */
+    .conversion-line {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-ink);
+      margin: -10px 0 20px;
+    }
+
     /* ===================== STAT BOXES ===================== */
     .stats-grid {
       display: grid;
@@ -589,6 +608,8 @@
           <p>Where every candidate stands right now</p>
         </div>
 
+        <div id="needs-action-wrap"></div>
+
         <div class="stats-grid">
           <div class="stat-box grey">
             <div class="stat-label">Not Touched</div>
@@ -607,6 +628,8 @@
             <div class="stat-value" id="ov-booked">0</div>
           </div>
         </div>
+
+        <div id="ov-conversion" class="conversion-line"></div>
 
         <div class="card">
           <div class="card-label">Recently added</div>
@@ -694,7 +717,10 @@
           <p>Every candidate ever added — active or archived — kept as a permanent record</p>
         </div>
 
-        <input type="search" id="vault-search-box" placeholder="Search name, mobile, email…" oninput="vault_render()" style="margin-bottom:14px;" />
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:14px;">
+          <input type="search" id="vault-search-box" placeholder="Search name, mobile, email…" oninput="vault_render()" style="flex:1; margin-bottom:0;" />
+          <button class="btn btn-ghost btn-sm" onclick="vault_exportCSV()" style="flex:none;">⬇ Export CSV</button>
+        </div>
 
         <div id="vault-list"></div>
         <div id="vault-empty" class="empty" hidden>No candidates in the vault yet</div>
@@ -775,6 +801,17 @@
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
 
+    // Whole calendar days from ISO date `a` to ISO date `b` (b - a), counting
+    // by calendar date at local midnight rather than raw 48-hour blocks — so
+    // an outcome set at 11pm two calendar days ago already reads as "2 days
+    // ago" first thing the next morning, matching how Harry actually thinks
+    // about "how many days since I last touched this".
+    function daysBetweenISO(a, b) {
+      const da = new Date(a + 'T00:00:00');
+      const db = new Date(b + 'T00:00:00');
+      return Math.round((db - da) / 86400000);
+    }
+
     function ordinal(n) {
       const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
       return n + (s[(v - 20) % 10] || s[v] || s[0]);
@@ -849,7 +886,7 @@
     /* ============================================================
        FEATURE: CANDIDATES
        Data shape: [{ id, name, mobile, email, cvDate, cvLocation,
-                       s1Done, s1Date, outcome, notes,
+                       s1Done, s1Date, outcome, outcomeDate, notes,
                        fitRating, fitNotes,
                        startDate, startTime, s3Done, s3Date,
                        s4Done, s4Date, createdAt }]
@@ -881,7 +918,7 @@
         id: newId(), name, mobile, email,
         cvDate: todayISO(), cvLocation,
         s1Done: false, s1Date: '',
-        outcome: '', notes: '',
+        outcome: '', outcomeDate: '', notes: '',
         fitRating: '', fitNotes: '',
         startDate: '', startTime: '',
         s3Done: false, s3Date: '',
@@ -920,6 +957,7 @@
       const item = items.find(i => i.id === id);
       if (!item) return;
       item.outcome = value;
+      item.outcomeDate = todayISO();
       candidates_save(items);
       candidates_render();
     }
@@ -1263,6 +1301,11 @@
         default:
           return;
       }
+      // Every reachable branch above reassigns item.outcome (even the
+      // "reset to no outcome" branches) — keep outcomeDate in step with it
+      // so the "needs action today" overdue-callback check always reflects
+      // how long the CURRENT outcome has actually been set.
+      item.outcomeDate = todayISO();
       candidates_save(items);
       candidates_render();
     }
@@ -1583,6 +1626,25 @@
       cv_renderPending();
     }
 
+    // ---- Duplicate detection: pending CV rows vs. everything already in
+    // candidates_get() (active AND archived — a duplicate could already be
+    // sitting in the Vault). Recomputed at render time off the row's CURRENT
+    // mobile/email (row.mobile/row.email), so editing a pending row's fields
+    // updates the duplicate flag on the next re-render, same as any other
+    // pending-row field. ----
+    function cv_normalizePhone(s) { return (s || '').replace(/\D/g, ''); }
+    function cv_normalizeEmail(s) { return (s || '').trim().toLowerCase(); }
+
+    function cv_findDuplicate(row) {
+      const mobile = cv_normalizePhone(row.mobile);
+      const email = cv_normalizeEmail(row.email);
+      if (!mobile && !email) return null;
+      return candidates_get().find(c =>
+        (mobile && cv_normalizePhone(c.mobile) === mobile) ||
+        (email && cv_normalizeEmail(c.email) === email)
+      ) || null;
+    }
+
     function cv_field(uid, field, value) {
       const row = cvPending.find(r => r._uid === uid);
       if (row) row[field] = value;
@@ -1602,7 +1664,7 @@
         email: (row.email || '').trim(),
         cvDate: todayISO(), cvLocation: row.filename || '',
         s1Done: false, s1Date: '',
-        outcome: '', notes: '',
+        outcome: '', outcomeDate: '', notes: '',
         fitRating: '', fitNotes: '',
         startDate: '', startTime: '',
         s3Done: false, s3Date: '',
@@ -1665,10 +1727,14 @@
       empty.style.display = 'none';
       wrap.hidden = false;
 
-      list.innerHTML = cvPending.map(row => `
+      list.innerHTML = cvPending.map(row => {
+        const dup = cv_findDuplicate(row);
+        const dupMeta = dup ? CATEGORY_META[categoryOf(dup)] : null;
+        return `
         <div class="card">
           <div class="cv-review-filename">📄 ${escapeHtml(row.filename)}</div>
           ${row.error ? `<div class="cv-review-note">${escapeHtml(row.error)}</div>` : ''}
+          ${dup ? `<div class="cv-review-note">⚠ Possible duplicate — already in the pipeline as ${escapeHtml(dup.name) || '(no name)'} (${dupMeta.label})</div>` : ''}
           <div class="field-grid-2">
             <div class="wide">
               <label class="mini-label">Name</label>
@@ -1691,7 +1757,8 @@
             <button class="btn btn-danger btn-sm" onclick="cv_discard('${row._uid}')">Discard</button>
           </div>
         </div>
-      `).join('');
+      `;
+      }).join('');
     }
 
     /* ============================================================
@@ -1714,6 +1781,9 @@
       document.getElementById('ov-called').textContent = counts.called;
       document.getElementById('ov-booked').textContent = counts.booked;
 
+      renderNeedsAction();
+      renderConversionStat();
+
       const recent = document.getElementById('ov-recent');
       if (!recent) return;
       if (!items.length) { recent.innerHTML = '<div class="empty">No candidates yet</div>'; return; }
@@ -1730,6 +1800,89 @@
     }
 
     /* ============================================================
+       FEATURE: "NEEDS ACTION TODAY" (Overview, top of page)
+       Two kinds of actionable item, both computed only over ACTIVE
+       (non-archived) candidates — an archived candidate is done and
+       shouldn't nag Harry:
+         1. Overdue callback — outcome === 'callback' and it's been 2+
+            CALENDAR days (see daysBetweenISO's note on why calendar days,
+            not a rolling 48h window) since outcomeDate was last set.
+         2. Reminder due/overdue — outcome === 'booked', s4Done === false,
+            and startDate is today, tomorrow (due — Harry still has time),
+            or in the past (overdue — the day-before check-in window has
+            already been missed).
+       Renders nothing (and removes any previously-rendered card) when
+       there's nothing to flag — no empty state needed here.
+    ============================================================ */
+    function renderNeedsAction() {
+      const wrap = document.getElementById('needs-action-wrap');
+      if (!wrap) return;
+
+      const items = candidates_get().filter(c => !c.archived);
+      const today = todayISO();
+      const rows = [];
+
+      items.forEach(c => {
+        if (c.outcome === 'callback' && c.outcomeDate) {
+          const days = daysBetweenISO(c.outcomeDate, today);
+          if (days >= 2) {
+            rows.push({
+              id: c.id, name: c.name, urgent: true,
+              reason: `Callback logged ${days} day${days === 1 ? '' : 's'} ago`
+            });
+          }
+        }
+        if (c.outcome === 'booked' && !c.s4Done && c.startDate) {
+          const diff = daysBetweenISO(c.startDate, today); // today - startDate, in days
+          if (diff > 0) {
+            rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Start reminder overdue' });
+          } else if (diff === 0) {
+            rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Start reminder due today' });
+          } else if (diff === -1) {
+            rows.push({ id: c.id, name: c.name, urgent: false, reason: 'Start reminder due tomorrow' });
+          }
+        }
+      });
+
+      if (!rows.length) { wrap.innerHTML = ''; return; }
+
+      // Most urgent (overdue) first, keeping a stable order within each group.
+      rows.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
+
+      wrap.innerHTML = `
+        <div class="card needs-action-card">
+          <div class="card-label">⚠ Needs action today</div>
+          ${rows.map(r => `
+            <div class="needs-action-row" onclick="candidate_openDetail('${r.id}')">
+              <span class="needs-action-name">${escapeHtml(r.name) || '(no name)'}</span>
+              <span class="badge ${r.urgent ? 'badge-red' : 'badge-amber'}">${escapeHtml(r.reason)}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       FEATURE: CONVERSION STAT (Overview, under the stats grid)
+       Lifetime metric — every candidate ever added, archived or not
+       (candidates_get().length), vs. how many currently sit at outcome
+       === 'booked'. Each candidate is one entry in that array, so there's
+       no risk of double-counting; candidates_get()'s underlying array is
+       the sole source of truth candidates_add()/cv_toCandidate() push
+       into, never appended to twice.
+    ============================================================ */
+    function renderConversionStat() {
+      const el = document.getElementById('ov-conversion');
+      if (!el) return;
+      const all = candidates_get();
+      const total = all.length;
+      if (!total) { el.textContent = ''; return; }
+      const booked = all.filter(c => c.outcome === 'booked').length;
+      const pct = Math.round((booked / total) * 100);
+      el.textContent = `${pct}% of candidates uploaded have reached Booked (${booked} of ${total})`;
+    }
+
+    /* ============================================================
        FEATURE: VAULT
        Permanent record of every candidate ever added, archived or not.
        Reuses candidateCardHTML/candidate_openDetail (the same detail modal
@@ -1742,6 +1895,54 @@
        just a reference/URL on the candidate record) would eventually be
        the better approach.
     ============================================================ */
+    // Always quotes every field and doubles up internal quotes — the simplest
+    // rule that's correct for every field here, including free-text ones
+    // (Notes/Fit Notes) that may themselves contain commas, quotes, or
+    // newlines, without needing to special-case which columns "need" quoting.
+    function csvEscape(val) {
+      const s = (val === null || val === undefined) ? '' : String(val);
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+
+    // Full backup/report export — every candidate in candidates_get(),
+    // active AND archived, regardless of whatever the Vault search box is
+    // currently filtering the on-screen table to.
+    function vault_exportCSV() {
+      const all = candidates_get();
+      const header = ['Name', 'Mobile', 'Email', 'CV Uploaded Date', 'CV Location', 'Status', 'Fit Rating', 'Outcome', 'Notes', 'Start Date', 'Start Time', 'Archived'];
+      const lines = [header.map(csvEscape).join(',')];
+
+      all.forEach(c => {
+        const statusLabel = CATEGORY_META[categoryOf(c)]?.label || '';
+        const fitLabel = c.fitRating ? (FIT_META[c.fitRating]?.label || '') : '';
+        lines.push([
+          c.name || '',
+          c.mobile || '',
+          c.email || '',
+          c.cvDate || '',
+          c.cvLocation || '',
+          statusLabel,
+          fitLabel,
+          c.outcome || '',
+          c.notes || '',
+          c.startDate || '',
+          c.startTime || '',
+          c.archived ? 'Yes' : 'No'
+        ].map(csvEscape).join(','));
+      });
+
+      const csv = lines.join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'mella-candidates-' + todayISO() + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+
     function vault_render() {
       const list = document.getElementById('vault-list');
       const empty = document.getElementById('vault-empty');
