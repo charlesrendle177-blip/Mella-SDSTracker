@@ -560,6 +560,57 @@
       }
     }
 
+    /* ===================== SCRIPT ===================== */
+    .script-layout { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; align-items: start; }
+    @media (max-width: 900px) { .script-layout { grid-template-columns: 1fr; } }
+
+    .script-quickfacts {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      margin-bottom: 20px;
+    }
+    .script-fact {
+      background: var(--surface-2);
+      border: 1.5px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .script-fact strong { color: var(--accent-ink); }
+
+    .script-stage {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .script-stage input[type="checkbox"] {
+      width: 20px; height: 20px; flex: none; margin-top: 3px;
+      accent-color: var(--green); cursor: pointer;
+    }
+    .script-stage-body { flex: 1; min-width: 0; }
+    .script-stage-num {
+      font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+      font-weight: 700; color: var(--label); margin-bottom: 4px;
+    }
+    .script-stage-text { font-size: 14.5px; line-height: 1.55; }
+    .script-stage-text strong { color: var(--accent-ink); }
+    .script-stage-note { font-size: 12px; color: var(--label); font-style: italic; margin-top: 4px; }
+    .script-stage.checked .script-stage-text { color: var(--label); }
+    .script-stage.checked .script-stage-text strong { color: var(--label); }
+
+    .script-sidebar-card { position: sticky; top: 22px; }
+    .script-search-results { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+    .script-search-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 10px; border: 1.5px solid var(--border); border-radius: 8px;
+      cursor: pointer; font-size: 13px;
+    }
+    .script-search-row:hover { border-color: var(--accent); background: var(--surface-2); }
+    .script-search-name { font-weight: 600; }
+    .script-search-mobile { color: var(--label); font-size: 11.5px; }
+
     /* ===================== MOBILE ===================== */
     @media (max-width: 480px) {
       .form-row, .field-grid-2 { grid-template-columns: 1fr; }
@@ -590,6 +641,7 @@
         <button class="tab" onclick="showTab('pipeline', this); candidates_render()"><span class="nav-icon">▤</span> Pipeline</button>
         <button class="tab" onclick="showTab('upload', this)"><span class="nav-icon">⇪</span> Upload CVs</button>
         <button class="tab" onclick="showTab('vault', this); vault_render()"><span class="nav-icon">🗄</span> Vault</button>
+        <button class="tab" onclick="showTab('script', this)"><span class="nav-icon">☎</span> Script</button>
       </nav>
 
       <div class="sidebar-footer">
@@ -724,6 +776,41 @@
 
         <div id="vault-list"></div>
         <div id="vault-empty" class="empty" hidden>No candidates in the vault yet</div>
+      </div>
+
+      <!-- ===== SCRIPT ===== -->
+      <div id="script" class="section">
+        <div class="section-header">
+          <h2>Call Script</h2>
+          <p>Follow the stages in order — tick each one off as you cover it live</p>
+        </div>
+
+        <div class="script-quickfacts">
+          <span class="script-fact">Company: <strong>Sustainable Drainage Systems (SDS)</strong></span>
+          <span class="script-fact">Location: <strong>Highbridge</strong></span>
+          <span class="script-fact">Role: <strong>Machine operative</strong> — not picking/packing</span>
+          <span class="script-fact">Shifts: <strong>6am–2pm / 2pm–10pm</strong></span>
+          <span class="script-fact">Pay: <strong>£13/hr</strong> (+15% late shift), plus <strong>£260</strong></span>
+          <span class="script-fact"><strong>Not an agency</strong> — direct payroll, permanent role</span>
+        </div>
+
+        <div class="script-layout">
+          <div>
+            <div class="card">
+              <div class="card-label">Call flow</div>
+              <div id="script-stages"></div>
+              <button class="btn btn-ghost btn-sm" onclick="script_resetChecklist()">↺ Reset for next call</button>
+            </div>
+          </div>
+
+          <div class="script-sidebar-card">
+            <div class="card">
+              <div class="card-label">Find candidate</div>
+              <input type="search" id="script-search-box" placeholder="Search name, mobile, email…" oninput="script_renderSearch()" />
+              <div id="script-search-results" class="script-search-results"></div>
+            </div>
+          </div>
+        </div>
       </div>
 
     </div></div><!-- /main /content -->
@@ -2061,10 +2148,102 @@
     }
 
     /* ============================================================
+       FEATURE: CALL SCRIPT
+       Static call-flow reference for Harry's one-on-one calls, plus a
+       quick candidate lookup so he can open a record and log the
+       outcome without leaving this tab. The checklist is deliberately
+       NOT persisted anywhere (not part of a candidate record, not
+       saved to localStorage/Supabase) — it's just a per-call visual
+       aid for the person on the phone right now; "Reset for next
+       call" simply unchecks every box in the browser for the next go.
+    ============================================================ */
+    const SCRIPT_STAGES = [
+      {
+        label: 'Opening & interest check',
+        text: 'Hi this is Harry from Mella Recruitment. You have applied for a <strong>manufacturing job</strong> that I am advertising on Indeed – are you still interested in this role?',
+        note: 'They will usually reply yes.'
+      },
+      {
+        label: 'Role description',
+        text: 'Great – well it is for a manufacturing factory in <strong>Highbridge</strong> for a company called <strong>Sustainable Drainage Systems</strong>. On the site they are cutting and manufacturing plastic products, so there are roles operating machines – <strong>it isn’t a warehouse role</strong> like picking and packing. Is that ok?'
+      },
+      {
+        label: 'Shift pattern check',
+        text: 'So, they run shift work – <strong>6am–2pm</strong> and then <strong>2pm–10pm</strong>. Are you happy with shift work?',
+        note: 'If they say yes, carry on.'
+      },
+      {
+        label: 'Pay & benefits',
+        text: 'So, they pay around <strong>£13 an hour</strong>, the later shift has a <strong>15% uplift</strong> on the hourly rate, and they also give a <strong>£260</strong>.'
+      },
+      {
+        label: 'Not an agency',
+        text: 'Just to make you aware – <strong>we are not an agency</strong>, and you will be paid <strong>directly by the company on their payroll</strong>, as this is a <strong>permanent role</strong>.'
+      },
+      {
+        label: 'Booking close',
+        text: 'If you want to get booked in to start, we can get you booked in and you can go and do a shift – and if you like it, they’ll get you going.'
+      }
+    ];
+
+    function script_renderStages() {
+      const wrap = document.getElementById('script-stages');
+      if (!wrap) return;
+      wrap.innerHTML = SCRIPT_STAGES.map((s, i) => `
+        <div class="script-stage" id="script-stage-${i}">
+          <input type="checkbox" onchange="script_toggleStage(${i}, this.checked)">
+          <div class="script-stage-body">
+            <div class="script-stage-num">Step ${i + 1} — ${escapeHtml(s.label)}</div>
+            <div class="script-stage-text">${s.text}</div>
+            ${s.note ? `<div class="script-stage-note">${escapeHtml(s.note)}</div>` : ''}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function script_toggleStage(i, checked) {
+      document.getElementById('script-stage-' + i)?.classList.toggle('checked', checked);
+    }
+
+    function script_resetChecklist() {
+      document.querySelectorAll('#script-stages input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+      document.querySelectorAll('#script-stages .script-stage').forEach(el => el.classList.remove('checked'));
+    }
+
+    function script_renderSearch() {
+      const results = document.getElementById('script-search-results');
+      if (!results) return;
+      const q = (document.getElementById('script-search-box')?.value || '').trim().toLowerCase();
+      if (!q) { results.innerHTML = ''; return; }
+
+      const matches = candidates_get().filter(c =>
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.mobile || '').toLowerCase().includes(q) ||
+        (c.email || '').toLowerCase().includes(q)
+      ).slice(0, 8);
+
+      if (!matches.length) { results.innerHTML = '<div class="empty" style="padding:14px;">No matches</div>'; return; }
+
+      results.innerHTML = matches.map(c => {
+        const meta = CATEGORY_META[categoryOf(c)];
+        return `
+          <div class="script-search-row" onclick="candidate_openDetail('${c.id}')">
+            <div>
+              <div class="script-search-name">${escapeHtml(c.name) || '(no name)'}</div>
+              <div class="script-search-mobile">${escapeHtml(c.mobile)}</div>
+            </div>
+            <span class="badge ${meta.badge}">${meta.label}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    /* ============================================================
        INIT
     ============================================================ */
     document.addEventListener('DOMContentLoaded', () => {
       renderAll();
+      script_renderStages();
       initSync();
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden && sb) fetchRemote();
