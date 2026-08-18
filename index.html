@@ -20,6 +20,11 @@
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
     }
   </script>
+  <!-- SheetJS (xlsx) CDN — client-side Excel parsing (Upload CVs tab, CSV/Excel
+       candidate-list path). Pinned to 0.18.5: a stable release with a UMD
+       "full" build (xlsx.full.min.js) that drops into a plain <script> tag,
+       same reasoning as the PDF.js pin above. -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <style>
     /* ===================== TOKENS ===================== */
@@ -721,16 +726,16 @@
         </div>
 
         <div class="form-block">
-          <div class="form-block-title">Select CV files (PDF)</div>
+          <div class="form-block-title">Select CV files (PDF, CSV or Excel)</div>
           <label class="cv-dropzone" for="cv-files"
             ondragover="event.preventDefault(); this.classList.add('drag')"
             ondragleave="this.classList.remove('drag')"
             ondrop="event.preventDefault(); this.classList.remove('drag'); cv_filesChosen(event.dataTransfer.files)">
             <span class="cv-dropzone-icon">📄</span>
             <span class="cv-dropzone-text">Click to choose CV(s), or drag &amp; drop here</span>
-            <span class="cv-dropzone-sub">PDF only — one file or a whole batch at once</span>
+            <span class="cv-dropzone-sub">PDF, CSV or Excel — one file or a whole batch at once</span>
           </label>
-          <input type="file" id="cv-files" accept="application/pdf" multiple style="display:none" onchange="cv_filesChosen(this.files)">
+          <input type="file" id="cv-files" accept=".pdf,.csv,.xlsx,.xls,application/pdf,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" multiple style="display:none" onchange="cv_filesChosen(this.files)">
           <div id="cv-file-summary" class="mini-label" style="margin-top:8px; text-transform:none; letter-spacing:normal;"></div>
           <button class="btn btn-primary btn-block" id="cv-process-btn" style="margin-top:12px;" onclick="cv_processFiles()" disabled>Process CVs</button>
         </div>
@@ -743,7 +748,7 @@
           <div id="cv-review-list"></div>
         </div>
 
-        <div id="cv-empty" class="empty">No CVs processed yet — choose PDF files above and hit "Process CVs".</div>
+        <div id="cv-empty" class="empty">No CVs processed yet — choose PDF, CSV or Excel files above and hit "Process CVs".</div>
 
         <!-- Manual fallback: add a one-off candidate without a CV file -->
         <div class="form-block" style="margin-top:24px;">
@@ -1555,6 +1560,14 @@
        for review/editing — nothing here calls candidates_save() until
        "Add to pipeline" / "Add all to pipeline" is clicked.
        Pending row shape: { _uid, name, mobile, email, filename, error }
+
+       CSV and Excel files are treated differently: not a CV document to
+       text-mine, but a candidate LIST — every data row becomes its own
+       pending entry in this SAME queue (filename gets a "(row N)" suffix
+       so each one is traceable back to its source row), going through
+       the exact same review/edit/duplicate-detection/add flow as a
+       parsed PDF row. See cv_parseCsvFile/cv_parseExcelFile/
+       cv_rowsToPending further down.
     ============================================================ */
     let cvSelectedFiles = [];
     let cvPending = [];
@@ -1563,21 +1576,35 @@
     const CV_MOBILE_RE = /(?:\+44\s?7\d{3}|07\d{3})[\s-]?\d{3}[\s-]?\d{3,4}/;
     const CV_URL_RE = /^(https?:\/\/|www\.)/i;
 
+    // Accepts PDF (single CV document, text-mined below), or CSV/Excel
+    // (candidate LISTS — each row becomes its own pending entry; see
+    // cv_parseCsvFile/cv_parseExcelFile further down). Anything else is
+    // skipped and counted, same as the PDF-only behaviour before it.
+    const CV_ACCEPTED_MIME = new Set([
+      'application/pdf',
+      'text/csv',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel'
+    ]);
+    function cv_isAcceptedFile(f) {
+      return CV_ACCEPTED_MIME.has(f.type) || /\.(pdf|csv|xlsx|xls)$/i.test(f.name);
+    }
+
     function cv_filesChosen(fileList) {
       const all = Array.from(fileList || []);
-      const files = all.filter(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
+      const files = all.filter(cv_isAcceptedFile);
       const skipped = all.length - files.length;
       cvSelectedFiles = files;
 
       const summary = document.getElementById('cv-file-summary');
       const btn = document.getElementById('cv-process-btn');
       if (!files.length) {
-        summary.textContent = skipped ? 'Only PDF files are supported — please choose PDF CVs.' : '';
+        summary.textContent = skipped ? 'Only PDF, CSV or Excel files are supported — please choose CV or candidate-list files.' : '';
         btn.disabled = true;
         return;
       }
       summary.textContent = files.length + ' file' + (files.length === 1 ? '' : 's') + ' selected' +
-        (skipped ? ' (' + skipped + ' non-PDF file' + (skipped === 1 ? '' : 's') + ' skipped)' : '');
+        (skipped ? ' (' + skipped + ' unsupported file' + (skipped === 1 ? '' : 's') + ' skipped)' : '');
       btn.disabled = false;
     }
 
@@ -1688,9 +1715,144 @@
       });
     }
 
+    // ---- CSV / Excel candidate-LIST parsing -----------------------------
+    // Both formats end up as the same shape — "rows of arrays, header row
+    // first" — so column detection and row→pending-entry conversion are
+    // shared in cv_rowsToPending() below.
+    const CV_HEADER_ALIASES = {
+      name:   ['name', 'full name', 'candidate name', 'applicant name'],
+      mobile: ['mobile', 'phone', 'phone number', 'mobile number', 'contact number', 'telephone'],
+      email:  ['email', 'email address']
+    };
+
+    // Case-insensitive, trimmed match of a header row's cells against an
+    // alias list. Returns the column index, or -1 if none of the aliases
+    // appear in the header row at all.
+    function cv_findHeaderIndex(headerRow, aliases) {
+      const norm = headerRow.map(h => String(h == null ? '' : h).trim().toLowerCase());
+      for (let i = 0; i < norm.length; i++) {
+        if (aliases.includes(norm[i])) return i;
+      }
+      return -1;
+    }
+
+    // Hand-rolled CSV row splitter — respects quoted fields that themselves
+    // contain commas or newlines, and doubled "" as an escaped literal quote
+    // inside a quoted field. Mirrors the quoting rules csvEscape() writes
+    // (further down, used for the Vault's export), just for reading instead
+    // of writing. Deliberately not a full RFC-4180 library — CV/candidate
+    // export spreadsheets don't need more than this.
+    function cv_parseCSV(text) {
+      const rows = [];
+      let row = [];
+      let field = '';
+      let inQuotes = false;
+      const s = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (inQuotes) {
+          if (ch === '"') {
+            if (s[i + 1] === '"') { field += '"'; i++; }
+            else { inQuotes = false; }
+          } else {
+            field += ch;
+          }
+        } else if (ch === '"') {
+          inQuotes = true;
+        } else if (ch === ',') {
+          row.push(field); field = '';
+        } else if (ch === '\n') {
+          row.push(field); rows.push(row); row = []; field = '';
+        } else {
+          field += ch;
+        }
+      }
+      row.push(field);
+      rows.push(row);
+      // Drop a single trailing all-blank row — e.g. a file that ends with
+      // a final newline parses one extra empty row that isn't real data.
+      if (rows.length > 1) {
+        const last = rows[rows.length - 1];
+        if (last.length === 1 && last[0] === '') rows.pop();
+      }
+      return rows;
+    }
+
+    // Shared by the CSV and Excel paths: given "rows of arrays, header row
+    // first" plus the original filename, finds the Name/Mobile/Email
+    // columns by header alias and builds one cvPending entry per non-blank
+    // data row (same { _uid, name, mobile, email, filename, error } shape
+    // cv_parse() produces for a PDF, so cv_renderPending()/cv_toCandidate()/
+    // cv_findDuplicate all work unmodified). If no Name column can be found
+    // at all, returns a single error row for the whole file rather than
+    // guessing — same "flag it, don't fabricate" approach as an unreadable
+    // PDF.
+    function cv_rowsToPending(rows, filename) {
+      if (!rows || !rows.length) {
+        return [{ _uid: newId(), name: '', mobile: '', email: '', filename, error: 'This file appears to be empty.' }];
+      }
+      const header = rows[0] || [];
+      const nameIdx = cv_findHeaderIndex(header, CV_HEADER_ALIASES.name);
+      const mobileIdx = cv_findHeaderIndex(header, CV_HEADER_ALIASES.mobile);
+      const emailIdx = cv_findHeaderIndex(header, CV_HEADER_ALIASES.email);
+
+      if (nameIdx === -1) {
+        return [{ _uid: newId(), name: '', mobile: '', email: '', filename,
+          error: 'Couldn’t find a Name column in this file — check it has a header row with Name/Mobile/Email columns.' }];
+      }
+
+      const cellStr = (row, idx) => (idx > -1 && row[idx] != null) ? String(row[idx]).trim() : '';
+      const out = [];
+      for (let r = 1; r < rows.length; r++) {
+        const dataRow = rows[r];
+        if (!dataRow || !dataRow.some(cell => String(cell == null ? '' : cell).trim())) continue; // fully-blank row
+        const name = cellStr(dataRow, nameIdx);
+        if (!name) continue; // nothing to key this row on — skip rather than flood the queue with empty rows
+        out.push({
+          _uid: newId(),
+          name,
+          mobile: cellStr(dataRow, mobileIdx),
+          email: cellStr(dataRow, emailIdx),
+          filename: filename + ' (row ' + (r + 1) + ')', // +1: header is row 1, matching what the user sees in Excel/Sheets
+          error: ''
+        });
+      }
+      return out;
+    }
+
+    async function cv_parseCsvFile(file) {
+      const text = await file.text();
+      const rows = cv_parseCSV(text);
+      return cv_rowsToPending(rows, file.name);
+    }
+
+    async function cv_parseExcelFile(file) {
+      if (!window.XLSX) throw new Error('XLSX library not loaded');
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      // header:1 → array-of-arrays (not SheetJS's own object-key inference),
+      // so column detection goes through the same cv_findHeaderIndex path
+      // as the CSV reader above.
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      return cv_rowsToPending(rows, file.name);
+    }
+
+    function cv_fileKind(file) {
+      const ext = (/\.([^.]+)$/.exec(file.name || '') || ['', ''])[1].toLowerCase();
+      if (ext === 'csv' || file.type === 'text/csv') return 'csv';
+      if (ext === 'xlsx' || ext === 'xls' ||
+          file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+          file.type === 'application/vnd.ms-excel') return 'excel';
+      return 'pdf';
+    }
+
     async function cv_processFiles() {
       if (!cvSelectedFiles.length) return;
-      if (!window.pdfjsLib) { alert('The PDF reader failed to load (check your internet connection) — reload the page and try again.'); return; }
+      // Only PDF.js is required for the PDF path — a batch of pure CSV/Excel
+      // candidate lists shouldn't be blocked by it failing to load.
+      const hasPdf = cvSelectedFiles.some(f => cv_fileKind(f) === 'pdf');
+      if (hasPdf && !window.pdfjsLib) { alert('The PDF reader failed to load (check your internet connection) — reload the page and try again.'); return; }
 
       const btn = document.getElementById('cv-process-btn');
       const originalLabel = btn.textContent;
@@ -1698,6 +1860,29 @@
       btn.textContent = 'Processing…';
 
       for (const file of cvSelectedFiles) {
+        const kind = cv_fileKind(file);
+
+        if (kind === 'csv') {
+          try {
+            cvPending.push(...await cv_parseCsvFile(file));
+          } catch (err) {
+            cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name,
+              error: 'Couldn’t read this CSV file — check it opens correctly elsewhere and try again.' });
+          }
+          continue;
+        }
+
+        if (kind === 'excel') {
+          try {
+            cvPending.push(...await cv_parseExcelFile(file));
+          } catch (err) {
+            cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name,
+              error: 'Couldn’t read this Excel file — check it opens correctly elsewhere and try again.' });
+          }
+          continue;
+        }
+
+        // ---- PDF path (unchanged) ----
         let cvFile = '';
         try { cvFile = await cv_readAsDataURL(file); } catch { cvFile = ''; }
 
