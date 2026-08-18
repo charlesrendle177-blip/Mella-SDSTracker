@@ -656,6 +656,7 @@
         <button class="tab" onclick="showTab('pipeline', this); candidates_render()"><span class="nav-icon">▤</span> Pipeline</button>
         <button class="tab" onclick="showTab('upload', this)"><span class="nav-icon">⇪</span> Upload CVs</button>
         <button class="tab" onclick="showTab('vault', this); vault_render()"><span class="nav-icon">🗄</span> Vault</button>
+        <button class="tab" onclick="showTab('attendance', this); attendance_render()"><span class="nav-icon">✅</span> Attendance</button>
         <button class="tab" onclick="showTab('script', this)"><span class="nav-icon">☎</span> Script</button>
       </nav>
 
@@ -791,6 +792,24 @@
 
         <div id="vault-list"></div>
         <div id="vault-empty" class="empty" hidden>No candidates in the vault yet</div>
+      </div>
+
+      <!-- ===== ATTENDANCE ===== -->
+      <div id="attendance" class="section">
+        <div class="section-header">
+          <h2>Attendance</h2>
+          <p>Confirm whether booked candidates actually showed up for their first shift</p>
+        </div>
+
+        <div id="attendance-needs-checking-wrap"></div>
+
+        <div class="card-label" style="margin-top:4px;">All starters</div>
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:14px;">
+          <input type="search" id="attendance-search-box" placeholder="Search name, mobile, email…" oninput="attendance_render()" style="flex:1; margin-bottom:0;" />
+        </div>
+
+        <div id="attendance-list"></div>
+        <div id="attendance-empty" class="empty" hidden>No booked starters yet</div>
       </div>
 
       <!-- ===== SCRIPT ===== -->
@@ -994,9 +1013,11 @@
                        s1Done, s1Date, outcome, outcomeDate, notes,
                        fitRating, fitNotes,
                        startDate, startTime, s3Done, s3Date,
-                       s4Done, s4Date, createdAt }]
+                       s4Done, s4Date, attendance, attendanceDate, createdAt }]
        outcome: '' | 'callback' | 'not-interested' | 'not-booked' | 'booked'
        fitRating: '' | 'low' | 'medium' | 'high'
+       attendance: '' | 'showed' | 'no-show' — whether a 'booked' candidate
+         actually turned up for their first shift; see candidate_setAttendance()
     ============================================================ */
     const CANDIDATES_KEY = 'mella_candidates';
 
@@ -1028,6 +1049,7 @@
         startDate: '', startTime: '',
         s3Done: false, s3Date: '',
         s4Done: false, s4Date: '',
+        attendance: '', attendanceDate: '',
         archived: false, cvFile: '',
         createdAt: new Date().toISOString()
       });
@@ -1072,6 +1094,52 @@
       medium: { label: 'Fit: Medium', badge: 'badge-amber' },
       high:   { label: 'Fit: High',   badge: 'badge-green' }
     };
+
+    // Attendance badge labels for UI display (Vault table, Attendance tab,
+    // detail-modal indicator). CSV export intentionally does NOT reuse this —
+    // it wants a blank cell for '' rather than the word "Pending" (see
+    // vault_exportCSV()).
+    const ATTENDANCE_META = {
+      '':        { label: 'Pending',  badge: 'badge-grey' },
+      'showed':  { label: 'Showed',   badge: 'badge-green' },
+      'no-show': { label: 'No-show',  badge: 'badge-red' }
+    };
+
+    // Marks whether a booked candidate turned up for their first shift.
+    // Only meaningful for outcome === 'booked' candidates, but doesn't
+    // enforce that here — the callers (Attendance tab / detail-modal
+    // control) only ever expose the buttons when outcome is 'booked'.
+    function candidate_setAttendance(id, value) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      item.attendance = value;
+      item.attendanceDate = todayISO();
+      candidates_save(items);
+      attendance_render();
+      renderOverview();
+      renderDetailModal();
+      vault_render();
+    }
+
+    // Compact attendance control shared by candidateCardHTML() (so it's
+    // editable from the Kanban tile / Vault row / Attendance-tab row detail
+    // modal, wherever it's opened from) — two one-click buttons, with the
+    // currently-active one filled in as a visual "which one is set" indicator
+    // instead of a plain outline, plus an explicit badge once something is set.
+    function candidate_attendanceControlHTML(c) {
+      if (c.outcome !== 'booked') return '';
+      return `
+        <div class="wide" style="margin-top:2px;">
+          <label class="mini-label">Attendance</label>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <button class="btn btn-sm ${c.attendance === 'showed' ? 'btn-green' : 'btn-ghost'}" onclick="candidate_setAttendance('${c.id}','showed')">✓ Showed up</button>
+            <button class="btn btn-sm ${c.attendance === 'no-show' ? 'btn-danger' : 'btn-ghost'}" onclick="candidate_setAttendance('${c.id}','no-show')">✗ No show</button>
+            ${c.attendance ? `<span class="badge ${ATTENDANCE_META[c.attendance].badge}">${ATTENDANCE_META[c.attendance].label}</span>` : ''}
+          </div>
+        </div>
+      `;
+    }
 
     // Persists via candidate_field (no full re-render), then patches the name-row
     // fit badge in place — same "don't lose focus" pattern as preview3/preview4.
@@ -1312,6 +1380,7 @@
                       oninput="candidate_field('${c.id}','startTime',this.value)">
                   </div>
                 </div>
+                ${candidate_attendanceControlHTML(c)}
               </li>
 
               <li class="step" data-step="3">
@@ -1550,6 +1619,7 @@
       renderDetailModal();
       renderOverview();
       vault_render();
+      attendance_render();
     }
 
     /* ============================================================
@@ -1954,6 +2024,7 @@
         startDate: '', startTime: '',
         s3Done: false, s3Date: '',
         s4Done: false, s4Date: '',
+        attendance: '', attendanceDate: '',
         archived: false, cvFile: row.cvFile || '',
         createdAt: new Date().toISOString()
       };
@@ -2086,7 +2157,7 @@
 
     /* ============================================================
        FEATURE: "NEEDS ACTION TODAY" (Overview, top of page)
-       Two kinds of actionable item, both computed only over ACTIVE
+       Three kinds of actionable item, all computed only over ACTIVE
        (non-archived) candidates — an archived candidate is done and
        shouldn't nag Harry:
          1. Overdue callback — outcome === 'callback' and it's been 2+
@@ -2096,6 +2167,10 @@
             and startDate is today, tomorrow (due — Harry still has time),
             or in the past (overdue — the day-before check-in window has
             already been missed).
+         3. Attendance not confirmed — outcome === 'booked', startDate is
+            today or in the past (the shift has already happened), and
+            attendance === '' (nobody's said whether they turned up yet).
+            Same condition Attendance tab's "Needs checking" section uses.
        Renders nothing (and removes any previously-rendered card) when
        there's nothing to flag — no empty state needed here.
     ============================================================ */
@@ -2126,6 +2201,9 @@
           } else if (diff === -1) {
             rows.push({ id: c.id, name: c.name, urgent: false, reason: 'Start reminder due tomorrow' });
           }
+        }
+        if (c.outcome === 'booked' && c.attendance === '' && c.startDate && c.startDate <= today) {
+          rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Attendance not confirmed' });
         }
       });
 
@@ -2194,12 +2272,15 @@
     // currently filtering the on-screen table to.
     function vault_exportCSV() {
       const all = candidates_get();
-      const header = ['Name', 'Mobile', 'Email', 'CV Uploaded Date', 'CV Location', 'Status', 'Fit Rating', 'Outcome', 'Notes', 'Start Date', 'Start Time', 'Archived'];
+      const header = ['Name', 'Mobile', 'Email', 'CV Uploaded Date', 'CV Location', 'Status', 'Fit Rating', 'Outcome', 'Attendance', 'Notes', 'Start Date', 'Start Time', 'Archived'];
       const lines = [header.map(csvEscape).join(',')];
 
       all.forEach(c => {
         const statusLabel = CATEGORY_META[categoryOf(c)]?.label || '';
         const fitLabel = c.fitRating ? (FIT_META[c.fitRating]?.label || '') : '';
+        // Human-readable, not the raw 'showed'/'no-show' string — and blank
+        // (not "Pending") when attendance hasn't been marked at all.
+        const attendanceLabel = c.attendance === 'showed' ? 'Showed' : c.attendance === 'no-show' ? 'No show' : '';
         lines.push([
           c.name || '',
           c.mobile || '',
@@ -2209,6 +2290,7 @@
           statusLabel,
           fitLabel,
           c.outcome || '',
+          attendanceLabel,
           c.notes || '',
           c.startDate || '',
           c.startTime || '',
@@ -2276,6 +2358,7 @@
                     <td>
                       <span class="badge ${meta.badge}">${meta.label}</span>
                       ${c.archived ? '<span class="badge badge-grey">Archived</span>' : ''}
+                      ${(c.outcome === 'booked' && c.attendance) ? `<span class="badge ${ATTENDANCE_META[c.attendance].badge}">${ATTENDANCE_META[c.attendance].label}</span>` : ''}
                     </td>
                     <td>${fit}</td>
                     <td>
@@ -2290,6 +2373,98 @@
                   </tr>
                 `;
               }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       FEATURE: ATTENDANCE TAB
+       Layer on top of the Kanban board's "Booked" outcome — not a new
+       Kanban column. Two sections:
+         1. "Needs checking" — booked candidates whose shift has already
+            happened (startDate today or in the past) and attendance
+            hasn't been marked yet. Same condition renderNeedsAction()
+            flags on the Overview. Omitted entirely (no empty state) when
+            there's nothing to check, same convention as the Overview
+            needs-action card.
+         2. "All starters" — every booked candidate, searchable, reusing
+            the Vault table's visual pattern (.vault-table/.vault-row).
+       Both sections are scoped to ACTIVE (non-archived) candidates only —
+       this is a working tool tab like Pipeline/Overview, not the
+       permanent record the Vault already provides.
+    ============================================================ */
+    function attendance_render() {
+      const needsWrap = document.getElementById('attendance-needs-checking-wrap');
+      const list = document.getElementById('attendance-list');
+      const empty = document.getElementById('attendance-empty');
+      if (!needsWrap || !list || !empty) return;
+
+      const today = todayISO();
+      const active = candidates_get().filter(c => !c.archived);
+
+      // ---- Needs checking ----
+      const needsChecking = active
+        .filter(c => c.outcome === 'booked' && c.attendance === '' && c.startDate && c.startDate <= today)
+        .sort((a, b) => (a.startDate + (a.startTime || '')).localeCompare(b.startDate + (b.startTime || '')));
+
+      if (!needsChecking.length) {
+        needsWrap.innerHTML = '';
+      } else {
+        needsWrap.innerHTML = `
+          <div class="card needs-action-card">
+            <div class="card-label">⚠ Needs checking</div>
+            ${needsChecking.map(c => `
+              <div class="needs-action-row" style="cursor:default;">
+                <span class="needs-action-name">${escapeHtml(c.name) || '(no name)'} — ${escapeHtml(formatStart(c.startDate, c.startTime))}</span>
+                <span style="display:flex; gap:6px; flex:none;">
+                  <button class="btn btn-green btn-sm" onclick="candidate_setAttendance('${c.id}','showed')">✓ Showed up</button>
+                  <button class="btn btn-danger btn-sm" onclick="candidate_setAttendance('${c.id}','no-show')">✗ No show</button>
+                </span>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      // ---- All starters (searchable table, Vault-table visual pattern) ----
+      const q = (document.getElementById('attendance-search-box')?.value || '').trim().toLowerCase();
+      const starters = active.filter(c => c.outcome === 'booked' && (!q ||
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.mobile || '').toLowerCase().includes(q) ||
+        (c.email || '').toLowerCase().includes(q)));
+
+      if (!starters.length) {
+        list.innerHTML = '';
+        empty.hidden = false;
+        return;
+      }
+      empty.hidden = true;
+
+      // Soonest start first; candidates with no start date set yet sort last.
+      const sorted = [...starters].sort((a, b) => (a.startDate || '9999-99-99').localeCompare(b.startDate || '9999-99-99'));
+
+      list.innerHTML = `
+        <div class="vault-table-wrap">
+          <table class="vault-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Mobile</th>
+                <th>Start</th>
+                <th>Attendance</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.map(c => `
+                <tr class="vault-row" onclick="candidate_openDetail('${c.id}')">
+                  <td>${escapeHtml(c.name) || '(no name)'}</td>
+                  <td>${escapeHtml(c.mobile)}</td>
+                  <td>${escapeHtml(formatStart(c.startDate, c.startTime))}</td>
+                  <td><span class="badge ${ATTENDANCE_META[c.attendance].badge}">${ATTENDANCE_META[c.attendance].label}</span></td>
+                </tr>
+              `).join('')}
             </tbody>
           </table>
         </div>
