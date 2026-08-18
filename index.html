@@ -589,16 +589,26 @@
       width: 20px; height: 20px; flex: none; margin-top: 3px;
       accent-color: var(--green); cursor: pointer;
     }
-    .script-stage-body { flex: 1; min-width: 0; }
+    .script-stage-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
     .script-stage-num {
       font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
-      font-weight: 700; color: var(--label); margin-bottom: 4px;
+      font-weight: 700; color: var(--label);
     }
-    .script-stage-text { font-size: 14.5px; line-height: 1.55; }
-    .script-stage-text strong { color: var(--accent-ink); }
-    .script-stage-note { font-size: 12px; color: var(--label); font-style: italic; margin-top: 4px; }
-    .script-stage.checked .script-stage-text { color: var(--label); }
-    .script-stage.checked .script-stage-text strong { color: var(--label); }
+    .script-stage-label {
+      font-family: var(--font-display); font-size: 15px; font-weight: 600;
+      border: 1.5px solid transparent; padding: 3px 6px; background: transparent;
+    }
+    .script-stage-label:hover, .script-stage-label:focus { border-color: var(--border); background: var(--surface); }
+    .script-stage-textarea {
+      font-size: 14px; line-height: 1.55; resize: vertical; min-height: 64px;
+    }
+    .script-stage-note-input {
+      font-size: 12px; color: var(--label); font-style: italic;
+      border: 1.5px solid transparent; padding: 3px 6px; background: transparent;
+    }
+    .script-stage-note-input:hover, .script-stage-note-input:focus { border-color: var(--border); background: var(--surface); font-style: normal; }
+    .script-stage.checked .script-stage-label,
+    .script-stage.checked .script-stage-textarea { color: var(--label); }
 
     .script-sidebar-card { position: sticky; top: 22px; }
     .script-search-results { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
@@ -797,9 +807,12 @@
         <div class="script-layout">
           <div>
             <div class="card">
-              <div class="card-label">Call flow</div>
+              <div class="card-label">Call flow — edit any line, it saves automatically and syncs to everyone</div>
               <div id="script-stages"></div>
-              <button class="btn btn-ghost btn-sm" onclick="script_resetChecklist()">↺ Reset for next call</button>
+              <div style="display:flex; gap:8px;">
+                <button class="btn btn-ghost btn-sm" onclick="script_resetChecklist()">↺ Reset for next call</button>
+                <button class="btn btn-ghost btn-sm" onclick="script_resetToDefault()">Reset script to default</button>
+              </div>
             </div>
           </div>
 
@@ -2105,7 +2118,7 @@
 
     async function fetchRemote() {
       if (!sb) return;
-      const keys = [CANDIDATES_KEY];
+      const keys = [CANDIDATES_KEY, SCRIPT_KEY];
       const { data: rows, error } = await sb.from('hub_data').select('key, value').in('key', keys);
       if (error || !rows) { setSyncDot(false); return; }
 
@@ -2145,6 +2158,7 @@
     ============================================================ */
     function renderAll() {
       candidates_render();
+      script_renderStages();
     }
 
     /* ============================================================
@@ -2157,45 +2171,62 @@
        aid for the person on the phone right now; "Reset for next
        call" simply unchecks every box in the browser for the next go.
     ============================================================ */
-    const SCRIPT_STAGES = [
-      {
-        label: 'Opening & interest check',
-        text: 'Hi this is Harry from Mella Recruitment. You have applied for a <strong>manufacturing job</strong> that I am advertising on Indeed – are you still interested in this role?',
-        note: 'They will usually reply yes.'
-      },
-      {
-        label: 'Role description',
-        text: 'Great – well it is for a manufacturing factory in <strong>Highbridge</strong> for a company called <strong>Sustainable Drainage Systems</strong>. On the site they are cutting and manufacturing plastic products, so there are roles operating machines – <strong>it isn’t a warehouse role</strong> like picking and packing. Is that ok?'
-      },
-      {
-        label: 'Shift pattern check',
-        text: 'So, they run shift work – <strong>6am–2pm</strong> and then <strong>2pm–10pm</strong>. Are you happy with shift work?',
-        note: 'If they say yes, carry on.'
-      },
-      {
-        label: 'Pay & benefits',
-        text: 'So, they pay around <strong>£13 an hour</strong>, the later shift has a <strong>15% uplift</strong> on the hourly rate, and they also give a <strong>£260</strong>.'
-      },
-      {
-        label: 'Not an agency',
-        text: 'Just to make you aware – <strong>we are not an agency</strong>, and you will be paid <strong>directly by the company on their payroll</strong>, as this is a <strong>permanent role</strong>.'
-      },
-      {
-        label: 'Booking close',
-        text: 'If you want to get booked in to start, we can get you booked in and you can go and do a shift – and if you like it, they’ll get you going.'
-      }
+    // Built-in fallback wording — what a fresh browser (or "Reset to default
+    // script") shows. Plain text, not HTML: once the text is editable in a
+    // <textarea>, there's no reliable way to keep inline <strong> markup
+    // editable too, so emphasis now lives in the quick-facts strip instead.
+    const SCRIPT_DEFAULTS = [
+      { label: 'Opening & interest check', text: 'Hi this is Harry from Mella Recruitment. You have applied for a manufacturing job that I am advertising on Indeed – are you still interested in this role?', note: 'They will usually reply yes.' },
+      { label: 'Role description', text: 'Great – well it is for a manufacturing factory in Highbridge for a company called Sustainable Drainage Systems. On the site they are cutting and manufacturing plastic products, so there are roles operating machines – it isn’t a warehouse role like picking and packing. Is that ok?', note: '' },
+      { label: 'Shift pattern check', text: 'So, they run shift work – 6am–2pm and then 2pm–10pm. Are you happy with shift work?', note: 'If they say yes, carry on.' },
+      { label: 'Pay & benefits', text: 'So, they pay around £13 an hour, the later shift has a 15% uplift on the hourly rate, and they also give a £260.', note: '' },
+      { label: 'Not an agency', text: 'Just to make you aware – we are not an agency, and you will be paid directly by the company on their payroll, as this is a permanent role.', note: '' },
+      { label: 'Booking close', text: 'If you want to get booked in to start, we can get you booked in and you can go and do a shift – and if you like it, they’ll get you going.', note: '' }
     ];
+
+    // Own sync key — deliberately separate from CANDIDATES_KEY, so editing
+    // the script can never touch candidate data (and vice versa).
+    const SCRIPT_KEY = 'mella_script';
+
+    function script_get() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(SCRIPT_KEY) || 'null');
+        if (Array.isArray(saved) && saved.length === SCRIPT_DEFAULTS.length) return saved;
+      } catch {}
+      return JSON.parse(JSON.stringify(SCRIPT_DEFAULTS)); // deep copy — never hand out the shared default objects to mutate
+    }
+
+    function script_save(stages) {
+      localStorage.setItem(SCRIPT_KEY, JSON.stringify(stages));
+      if (sb) sb.from('hub_data')
+        .upsert({ key: SCRIPT_KEY, value: stages, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+        .then(() => {});
+    }
+
+    // Persists one field without a full re-render, same "don't lose focus
+    // mid-keystroke" pattern candidate_field() already uses elsewhere.
+    function script_fieldChange(i, field, value) {
+      const stages = script_get();
+      if (!stages[i]) return;
+      stages[i][field] = value;
+      script_save(stages);
+    }
 
     function script_renderStages() {
       const wrap = document.getElementById('script-stages');
       if (!wrap) return;
-      wrap.innerHTML = SCRIPT_STAGES.map((s, i) => `
+      const stages = script_get();
+      wrap.innerHTML = stages.map((s, i) => `
         <div class="script-stage" id="script-stage-${i}">
           <input type="checkbox" onchange="script_toggleStage(${i}, this.checked)">
           <div class="script-stage-body">
-            <div class="script-stage-num">Step ${i + 1} — ${escapeHtml(s.label)}</div>
-            <div class="script-stage-text">${s.text}</div>
-            ${s.note ? `<div class="script-stage-note">${escapeHtml(s.note)}</div>` : ''}
+            <div class="script-stage-num">Step ${i + 1}</div>
+            <input class="script-stage-label" value="${escapeHtml(s.label)}" placeholder="Step name"
+              oninput="script_fieldChange(${i}, 'label', this.value)">
+            <textarea class="script-stage-textarea" rows="3" placeholder="What to say…"
+              oninput="script_fieldChange(${i}, 'text', this.value)">${escapeHtml(s.text)}</textarea>
+            <input class="script-stage-note-input" value="${escapeHtml(s.note || '')}" placeholder="Aside / reminder (optional)"
+              oninput="script_fieldChange(${i}, 'note', this.value)">
           </div>
         </div>
       `).join('');
@@ -2208,6 +2239,14 @@
     function script_resetChecklist() {
       document.querySelectorAll('#script-stages input[type="checkbox"]').forEach(cb => { cb.checked = false; });
       document.querySelectorAll('#script-stages .script-stage').forEach(el => el.classList.remove('checked'));
+    }
+
+    function script_resetToDefault() {
+      if (!confirm('Reset the call script back to the original wording? Any edits will be lost.')) return;
+      localStorage.removeItem(SCRIPT_KEY);
+      if (sb) sb.from('hub_data').delete().eq('key', SCRIPT_KEY).then(() => {});
+      script_renderStages();
+      showToast('Script reset to default');
     }
 
     function script_renderSearch() {
