@@ -1025,11 +1025,30 @@
       try { return JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]'); } catch { return []; }
     }
 
+    // The localStorage write is synchronous and immediate — it's always
+    // current the instant this returns. The Supabase upsert is DEBOUNCED:
+    // candidate_field() calls this on every single keystroke, and firing one
+    // network request per character means several can be in flight to the
+    // same row at once. Over a real network those requests can commit
+    // out of order — whichever lands LAST at the database wins, which is
+    // not necessarily the one carrying the most recently typed character.
+    // That's a real bug that was silently reverting notes/fields under fast
+    // typing or a slow connection, not just a display glitch. Debouncing
+    // collapses a burst of edits into one upsert, always reading the
+    // freshest localStorage at fire time (not a closed-over `items` from
+    // whichever call started the timer) so the request that actually goes
+    // out reflects everything typed up to that point.
+    let candidatesSaveTimer = null;
     function candidates_save(items) {
       localStorage.setItem(CANDIDATES_KEY, JSON.stringify(items));
-      if (sb) sb.from('hub_data')
-        .upsert({ key: CANDIDATES_KEY, value: items, updated_at: new Date().toISOString() }, { onConflict: 'key' })
-        .then(() => {});
+      if (!sb) return;
+      clearTimeout(candidatesSaveTimer);
+      candidatesSaveTimer = setTimeout(() => {
+        const latest = JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]');
+        sb.from('hub_data')
+          .upsert({ key: CANDIDATES_KEY, value: latest, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+          .then(() => {});
+      }, 500);
     }
 
     function candidates_add() {
@@ -2474,10 +2493,35 @@
     /* ============================================================
        SUPABASE SYNC
     ============================================================ */
+    // Coarse "is the user actively typing anywhere right now" check, used to
+    // avoid an incoming realtime update overwriting an in-progress edit —
+    // good enough for a small internal tool without tracking per-field state.
+    function isEditingField() {
+      const tag = document.activeElement && document.activeElement.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    }
+
+    let pendingRemoteUpdate = null;
+    let deferredRemoteApplyTimer = null;
+    function scheduleDeferredRemoteApply() {
+      clearTimeout(deferredRemoteApplyTimer);
+      deferredRemoteApplyTimer = setTimeout(() => {
+        if (isEditingField()) { scheduleDeferredRemoteApply(); return; } // still typing — keep waiting
+        if (!pendingRemoteUpdate) return;
+        const { key, value } = pendingRemoteUpdate;
+        pendingRemoteUpdate = null;
+        localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+        renderAll();
+      }, 400);
+    }
+
     let syncSubscribed = false;
 
     async function fetchRemote() {
       if (!sb) return;
+      // Same reasoning as the realtime handler's guard: don't let a merge
+      // triggered by page-load/tab-focus overwrite localStorage mid-edit.
+      if (isEditingField()) return;
       const keys = [CANDIDATES_KEY, SCRIPT_KEY];
       const { data: rows, error } = await sb.from('hub_data').select('key, value').in('key', keys);
       if (error || !rows) { setSyncDot(false); return; }
@@ -2506,6 +2550,13 @@
           .on('postgres_changes', { event: '*', schema: 'public', table: 'hub_data' }, payload => {
             const { key, value } = payload.new || {};
             if (!key) return;
+            // If this device is mid-edit (typing in any field, anywhere in
+            // the app) when an update arrives — from another device, or an
+            // echo of this device's own recent save — applying it immediately
+            // would overwrite whatever's being typed right now with a
+            // snapshot from a moment ago. Defer it: keep re-checking every
+            // 400ms until focus moves on, then apply the LATEST payload seen.
+            if (isEditingField()) { pendingRemoteUpdate = { key, value }; scheduleDeferredRemoteApply(); return; }
             localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
             renderAll();
           })
@@ -2556,11 +2607,19 @@
       return JSON.parse(JSON.stringify(SCRIPT_DEFAULTS)); // deep copy — never hand out the shared default objects to mutate
     }
 
+    // Same debounce reasoning as candidates_save() — script_fieldChange()
+    // fires this on every keystroke while editing a script stage.
+    let scriptSaveTimer = null;
     function script_save(stages) {
       localStorage.setItem(SCRIPT_KEY, JSON.stringify(stages));
-      if (sb) sb.from('hub_data')
-        .upsert({ key: SCRIPT_KEY, value: stages, updated_at: new Date().toISOString() }, { onConflict: 'key' })
-        .then(() => {});
+      if (!sb) return;
+      clearTimeout(scriptSaveTimer);
+      scriptSaveTimer = setTimeout(() => {
+        const latest = JSON.parse(localStorage.getItem(SCRIPT_KEY) || 'null') || stages;
+        sb.from('hub_data')
+          .upsert({ key: SCRIPT_KEY, value: latest, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+          .then(() => {});
+      }, 500);
     }
 
     // Persists one field without a full re-render, same "don't lose focus
