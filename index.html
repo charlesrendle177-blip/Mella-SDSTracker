@@ -47,6 +47,12 @@
       --font:        'Gothic A1', sans-serif;
       --font-display:'Lora', serif;
       --shadow: 0 1px 2px rgba(30,24,4,.05), 0 8px 22px rgba(30,24,4,.06);
+      --shadow-hover: 0 3px 8px rgba(30,24,4,.09), 0 14px 28px rgba(30,24,4,.1);
+      /* Shared motion curves — used by hover lifts, tab fades and the
+         Kanban drop "snap". Kept as tokens so every micro-interaction in
+         the app eases the same way instead of drifting apart over time. */
+      --ease-out:    cubic-bezier(.16,1,.3,1);
+      --ease-spring: cubic-bezier(.34,1.56,.64,1);
     }
 
     /* ===================== RESET ===================== */
@@ -113,8 +119,26 @@
       border-radius: 50%;
       background: #d1d5db;
       display: inline-block;
-      transition: background .3s;
+      transition: background-color .3s, box-shadow .3s;
       flex-shrink: 0;
+      box-shadow: 0 0 0 0 rgba(0,0,0,0);
+    }
+    .sync-dot.sync-ok   { background: #059669; box-shadow: 0 0 0 3px rgba(5,150,105,.16); }
+    .sync-dot.sync-fail { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,.16); }
+    /* Brief glow/pulse the instant a sync completes — re-triggered on every
+       setSyncDot() call (see JS) so each fresh sync reads as a small,
+       reassuring "just happened" beat rather than a flat colour swap. */
+    .sync-dot.sync-ok.sync-pulse   { animation: syncPulseOk .9s var(--ease-out); }
+    .sync-dot.sync-fail.sync-pulse { animation: syncPulseFail .9s var(--ease-out); }
+    @keyframes syncPulseOk {
+      0%   { box-shadow: 0 0 0 0 rgba(5,150,105,.5); }
+      70%  { box-shadow: 0 0 0 8px rgba(5,150,105,0); }
+      100% { box-shadow: 0 0 0 3px rgba(5,150,105,.16); }
+    }
+    @keyframes syncPulseFail {
+      0%   { box-shadow: 0 0 0 0 rgba(239,68,68,.5); }
+      70%  { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+      100% { box-shadow: 0 0 0 3px rgba(239,68,68,.16); }
     }
 
     /* ===================== NAV TABS (vertical in sidebar, horizontal when collapsed) ===================== */
@@ -145,7 +169,14 @@
     /* ===================== SECTIONS ===================== */
     .main { max-width: 1120px; padding: 28px 36px 60px; }
     .section { display: none; }
-    .section.active { display: block; }
+    .section.active {
+      display: block;
+      animation: sectionIn .28s var(--ease-out);
+    }
+    @keyframes sectionIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
     .section-header { margin-bottom: 20px; }
     .section-header h2 { font-family: var(--font-display); font-size: 23px; font-weight: 600; margin-bottom: 5px; letter-spacing: -.01em; }
     .section-header p { font-size: 13px; color: var(--label); }
@@ -172,10 +203,12 @@
     .needs-action-card { border-left: 4px solid var(--red); padding-left: 16px; }
     .needs-action-row {
       display: flex; align-items: center; justify-content: space-between;
-      gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border);
+      gap: 10px; padding: 9px 8px; margin: 0 -8px; border-bottom: 1px solid var(--border);
+      border-radius: 8px;
       cursor: pointer;
+      transition: background-color .15s;
     }
-    .needs-action-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .needs-action-row:last-child { border-bottom: none; }
     .needs-action-row:hover { background: var(--surface-2); }
     .needs-action-name { font-size: 13px; font-weight: 600; }
 
@@ -267,11 +300,26 @@
 
     /* ===================== EMPTY STATE ===================== */
     .empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
       text-align: center;
-      padding: 36px 20px;
+      padding: 40px 20px;
       color: var(--label);
       font-size: 14px;
+      gap: 3px;
     }
+    .empty-icon {
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      background: var(--surface-2);
+      border: 1.5px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+      margin-bottom: 8px;
+    }
+    .empty-title { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); }
+    .empty-sub { font-size: 12.5px; color: var(--label); max-width: 320px; line-height: 1.5; }
 
     /* ===================== CANDIDATE CARD ===================== */
     .candidate {
@@ -403,10 +451,20 @@
       display: flex;
       flex-direction: column;
       gap: 4px;
-      transition: box-shadow .15s, opacity .15s;
+      transition: box-shadow .18s var(--ease-out), transform .18s var(--ease-out), opacity .15s;
     }
-    .kanban-card:hover { box-shadow: 0 2px 6px rgba(30,24,4,.09), 0 10px 22px rgba(30,24,4,.1); }
+    .kanban-card:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); }
     .kanban-card.dragging { opacity: .4; }
+    /* One-off "snap" when a card lands in a column after a drag-drop —
+       toggled on just the dropped card (see kanban_drop/candidates_render),
+       not on every render, so a background sync update doesn't set the
+       whole board bouncing. */
+    .kanban-card.just-dropped { animation: kanbanSnap .32s var(--ease-spring); }
+    @keyframes kanbanSnap {
+      0%   { transform: scale(.94); }
+      60%  { transform: scale(1.02); }
+      100% { transform: scale(1); }
+    }
     .kanban-card-name { font-family: var(--font-display); font-size: 14px; font-weight: 600; }
     .kanban-card-mobile { font-size: 12px; color: var(--label); }
     .kanban-card-note {
@@ -501,8 +559,10 @@
       font-size: 16px;
       font-weight: 600;
     }
-    .vault-row { cursor: pointer; transition: background-color .15s; }
-    .vault-row:hover { background: var(--surface-2); }
+    .vault-row { cursor: pointer; }
+    .vault-row td { transition: background-color .15s, box-shadow .15s; }
+    .vault-row:hover td { background: var(--surface-2); }
+    .vault-row:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
     .vault-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
     /* ===================== ATTENDANCE — STARTER CARDS ===================== */
@@ -516,14 +576,14 @@
       border: 1.5px solid var(--border);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
-      padding: 14px 16px;
+      padding: 16px 18px;
       display: flex;
       flex-direction: column;
       gap: 8px;
       cursor: pointer;
-      transition: box-shadow .15s;
+      transition: box-shadow .18s var(--ease-out), transform .18s var(--ease-out);
     }
-    .starter-card:hover { box-shadow: 0 2px 6px rgba(30,24,4,.09), 0 10px 22px rgba(30,24,4,.1); }
+    .starter-card:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); }
     .starter-card-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; }
     .starter-card-meta { font-size: 12.5px; color: var(--label); }
     .starter-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -567,14 +627,29 @@
       font-size: 13px; font-weight: 700;
       box-shadow: 0 4px 14px rgba(0,0,0,.2);
       z-index: 50;
+      animation: toastIn .22s var(--ease-out);
     }
     .toast[hidden] { display: none; }
+    @keyframes toastIn {
+      from { opacity: 0; transform: translate(-50%, 10px); }
+      to   { opacity: 1; transform: translate(-50%, 0); }
+    }
     .modal-backdrop {
       position: fixed; inset: 0; background: rgba(17,24,39,.45);
       display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 60;
+      animation: backdropIn .18s var(--ease-out);
     }
     .modal-backdrop[hidden] { display: none; }
-    .modal { background: #fff; border-radius: 12px; padding: 20px; max-width: 460px; width: 100%; display: flex; flex-direction: column; gap: 12px; }
+    @keyframes backdropIn { from { opacity: 0; } to { opacity: 1; } }
+    .modal {
+      background: #fff; border-radius: 12px; padding: 20px; max-width: 460px; width: 100%;
+      display: flex; flex-direction: column; gap: 12px;
+      animation: modalIn .22s var(--ease-out);
+    }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(10px) scale(.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
     .modal h3 { font-size: 16px; }
     .modal p { font-size: 13px; color: var(--label); }
     .modal textarea { min-height: 180px; font-size: 13px; resize: vertical; }
@@ -680,10 +755,26 @@
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       padding: 8px 10px; border: 1.5px solid var(--border); border-radius: 8px;
       cursor: pointer; font-size: 13px;
+      transition: border-color .15s, background-color .15s;
     }
     .script-search-row:hover { border-color: var(--accent); background: var(--surface-2); }
     .script-search-name { font-weight: 600; }
     .script-search-mobile { color: var(--label); font-size: 11.5px; }
+
+    /* ===================== REDUCED MOTION ===================== */
+    /* Users who've asked the OS for reduced motion get every animation and
+       transition added in this pass (and the pre-existing ones) collapsed
+       to effectively instant — state still changes, it just doesn't move.
+       Scoped to this media query only, so nothing changes for anyone who
+       hasn't set the preference. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
 
     /* ===================== MOBILE ===================== */
     @media (max-width: 480px) {
@@ -808,7 +899,11 @@
           <div id="cv-review-list"></div>
         </div>
 
-        <div id="cv-empty" class="empty">No CVs processed yet — choose PDF, CSV or Excel files above and hit "Process CVs".</div>
+        <div id="cv-empty" class="empty">
+          <div class="empty-icon" aria-hidden="true">📄</div>
+          <div class="empty-title">No CVs processed yet</div>
+          <div class="empty-sub">Choose PDF, CSV or Excel files above and hit "Process CVs" — matches land here for a quick review before they join the pipeline.</div>
+        </div>
 
         <!-- Manual fallback: add a one-off candidate without a CV file -->
         <div class="form-block" style="margin-top:24px;">
@@ -850,7 +945,11 @@
         </div>
 
         <div id="vault-list"></div>
-        <div id="vault-empty" class="empty" hidden>No candidates in the vault yet</div>
+        <div id="vault-empty" class="empty" hidden>
+          <div class="empty-icon" aria-hidden="true">🗄</div>
+          <div class="empty-title">The vault is empty</div>
+          <div class="empty-sub">Every candidate ever added — active or archived — will be kept here as a permanent record.</div>
+        </div>
       </div>
 
       <!-- ===== ATTENDANCE ===== -->
@@ -868,7 +967,11 @@
         </div>
 
         <div id="attendance-list"></div>
-        <div id="attendance-empty" class="empty" hidden>No booked starters yet</div>
+        <div id="attendance-empty" class="empty" hidden>
+          <div class="empty-icon" aria-hidden="true">✅</div>
+          <div class="empty-title">No booked starters yet</div>
+          <div class="empty-sub">Once a candidate's call outcome is set to Booked on the Pipeline board, they'll show up here to track.</div>
+        </div>
       </div>
 
       <!-- ===== SCRIPT ===== -->
@@ -964,7 +1067,15 @@
     ============================================================ */
     function setSyncDot(ok) {
       const dot = document.getElementById('sync-dot');
-      if (dot) { dot.style.background = ok ? '#059669' : '#ef4444'; }
+      if (!dot) return;
+      dot.classList.remove('sync-ok', 'sync-fail', 'sync-pulse');
+      dot.classList.add(ok ? 'sync-ok' : 'sync-fail');
+      dot.title = ok ? 'Synced with team just now' : 'Sync error — this device\'s changes are only saved locally until it reconnects';
+      // Restart the pulse animation on every call (including repeat calls
+      // with the same `ok` value) — each call represents a fresh sync
+      // event, so it should re-glow every time, not just on a state change.
+      void dot.offsetWidth; // force reflow so re-adding the class restarts the animation
+      dot.classList.add('sync-pulse');
     }
 
     /* ============================================================
@@ -1168,6 +1279,16 @@
       }
     }
 
+    // Presentational-only toast copy for candidate_setOutcome() — purely a
+    // label lookup for showToast(), never read by any save/data path.
+    const OUTCOME_TOAST_LABEL = {
+      '': 'Outcome cleared',
+      callback: 'Callback logged',
+      'not-interested': 'Marked not interested',
+      'not-booked': 'Marked as not booked',
+      booked: 'Booked! 🎉'
+    };
+
     function candidate_setOutcome(id, value) {
       const items = candidates_get();
       const item = items.find(i => i.id === id);
@@ -1176,6 +1297,7 @@
       item.outcomeDate = todayISO();
       candidates_save(items);
       candidates_render();
+      showToast(OUTCOME_TOAST_LABEL[value] || 'Outcome updated');
     }
 
     const FIT_META = {
@@ -1209,6 +1331,7 @@
       renderOverview();
       renderDetailModal();
       vault_render();
+      showToast(value === 'showed' ? 'Marked as showed up' : 'Marked as no-show');
     }
 
     // Compact attendance control shared by candidateCardHTML() (so it's
@@ -1285,6 +1408,7 @@
       candidates_save(items);
       candidates_render();
       vault_render();
+      showToast('Archived — moved to Vault');
     }
 
     function candidate_restore(id) {
@@ -1295,6 +1419,7 @@
       candidates_save(items);
       candidates_render();
       vault_render();
+      showToast('Restored to pipeline');
     }
 
     // The only place a candidate record is actually removed for good.
@@ -1575,6 +1700,11 @@
 
     // ---- Native HTML5 drag-and-drop wiring ----
     let kanbanDragId = null;
+    // Purely presentational: which card just landed via a drop, so
+    // candidates_render() can give that one tile a "snap" animation
+    // instead of the whole board. Read once and cleared at the top of
+    // candidates_render() — never read by any data/save path.
+    let kanbanJustDroppedId = null;
 
     function kanban_dragStart(e, id) {
       kanbanDragId = id;
@@ -1605,6 +1735,7 @@
       const id = kanbanDragId || e.dataTransfer.getData('text/plain');
       kanbanDragId = null;
       if (!id) return;
+      kanbanJustDroppedId = id; // presentational only — see declaration above
       // Dropping back onto the column a card is already in is a harmless
       // no-op re-save (fields already match that column's meaning).
       kanban_moveCandidate(id, columnKey);
@@ -1613,13 +1744,13 @@
     // Compact Kanban tile — name, mobile, fit badge, one-line note preview.
     // Click anywhere on the tile opens the full detail view in a modal;
     // the tile itself is the drag handle (draggable="true" on the whole card).
-    function candidateTileHTML(c) {
+    function candidateTileHTML(c, justDropped) {
       const fit = c.fitRating
         ? `<span class="badge ${FIT_META[c.fitRating].badge} kanban-fit-badge">${FIT_META[c.fitRating].label}</span>`
         : '';
       const noteText = (c.notes || c.fitNotes || '').trim();
       return `
-        <div class="kanban-card" draggable="true" data-id="${c.id}"
+        <div class="kanban-card${justDropped ? ' just-dropped' : ''}" draggable="true" data-id="${c.id}"
           ondragstart="kanban_dragStart(event,'${c.id}')"
           ondragend="kanban_dragEnd(event)"
           onclick="candidate_openDetail('${c.id}')">
@@ -1664,6 +1795,11 @@
     function candidates_render() {
       const board = document.getElementById('kanban-board');
       if (!board) return;
+      // Presentational only — see kanbanJustDroppedId's declaration.
+      // Consumed once per render so the "snap" plays exactly once, on the
+      // card that was actually dropped, not on every subsequent re-render.
+      const justDroppedId = kanbanJustDroppedId;
+      kanbanJustDroppedId = null;
       const all = candidates_get().filter(c => !c.archived);
       const q = (document.getElementById('search-box')?.value || '').trim().toLowerCase();
       const matchesSearch = c => !q ||
@@ -1681,7 +1817,7 @@
       board.innerHTML = KANBAN_COLUMNS.map(col => {
         const items = all.filter(c => columnOf(c) === col.key && matchesSearch(c));
         const cardsHTML = items.length
-          ? items.map(candidateTileHTML).join('')
+          ? items.map(c => candidateTileHTML(c, c.id === justDroppedId)).join('')
           : `<div class="kanban-empty"><span class="kanban-empty-icon">📭</span><span>No candidates</span></div>`;
         return `
           <div class="kanban-column" style="--col-color:${col.color}">
