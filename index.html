@@ -150,6 +150,9 @@
     .stat-box.red    { background: #fee2e2; border: 1.5px solid #fca5a5; }
     .stat-box.red    .stat-label { color: #7f1d1d; }
     .stat-box.red    .stat-value { color: var(--red); }
+    .stat-box.grey   { background: #f3f4f6; border: 1.5px solid #e5e7eb; }
+    .stat-box.grey   .stat-label { color: #374151; }
+    .stat-box.grey   .stat-value { color: #6b7280; }
 
     /* ===================== FORM ===================== */
     .form-block {
@@ -254,8 +257,26 @@
     .start-fields { display: flex; gap: 10px; padding: 10px; background: #f0fdf4; border-radius: 8px; }
     .start-fields[hidden] { display: none; }
 
-    .candidate[data-outcome="not-interested"] .step[data-step="3"],
-    .candidate[data-outcome="not-interested"] .step[data-step="4"] { opacity: .45; }
+    .candidate:not([data-outcome="booked"]) .step[data-step="3"],
+    .candidate:not([data-outcome="booked"]) .step[data-step="4"] { opacity: .45; }
+
+    /* ===================== FIT BADGE / FILTER CHIPS ===================== */
+    .filter-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+    .chip {
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1.5px solid var(--border);
+      background: transparent;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--label);
+      transition: all .15s;
+    }
+    .chip.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
 
     .msg-preview {
       font-size: 12px;
@@ -329,21 +350,21 @@
         </div>
 
         <div class="stats-grid">
+          <div class="stat-box grey">
+            <div class="stat-label">Not Touched</div>
+            <div class="stat-value" id="ov-nottouched">0</div>
+          </div>
           <div class="stat-box amber">
-            <div class="stat-label">Awaiting Call</div>
-            <div class="stat-value" id="ov-awaiting">0</div>
+            <div class="stat-label">Messaged</div>
+            <div class="stat-value" id="ov-messaged">0</div>
           </div>
           <div class="stat-box purple">
-            <div class="stat-label">Interested</div>
-            <div class="stat-value" id="ov-interested">0</div>
+            <div class="stat-label">Called</div>
+            <div class="stat-value" id="ov-called">0</div>
           </div>
           <div class="stat-box green">
-            <div class="stat-label">Start Confirmed</div>
-            <div class="stat-value" id="ov-confirmed">0</div>
-          </div>
-          <div class="stat-box red">
-            <div class="stat-label">Not Interested</div>
-            <div class="stat-value" id="ov-notinterested">0</div>
+            <div class="stat-label">Booked</div>
+            <div class="stat-value" id="ov-booked">0</div>
           </div>
         </div>
 
@@ -387,17 +408,13 @@
         </div>
 
         <!-- Search / filter -->
-        <div class="form-row" style="margin-bottom:16px;">
-          <input type="search" id="search-box" placeholder="Search name, mobile, email…" oninput="candidates_render()" />
-          <select id="filter-select" onchange="candidates_render()">
-            <option value="all">All statuses</option>
-            <option value="awaiting-contact">Awaiting contact</option>
-            <option value="awaiting-call">Message sent — awaiting call</option>
-            <option value="not-interested">Not interested</option>
-            <option value="interested">Interested</option>
-            <option value="confirmed">Start confirmed</option>
-            <option value="started">Reminder sent</option>
-          </select>
+        <input type="search" id="search-box" placeholder="Search name, mobile, email…" oninput="candidates_render()" style="margin-bottom:10px;" />
+        <div class="filter-chips" id="filter-chips">
+          <button type="button" class="chip active" data-filter="not-touched" onclick="candidates_setFilter('not-touched', this)">Not Touched</button>
+          <button type="button" class="chip" data-filter="messaged" onclick="candidates_setFilter('messaged', this)">Messaged</button>
+          <button type="button" class="chip" data-filter="called" onclick="candidates_setFilter('called', this)">Called</button>
+          <button type="button" class="chip" data-filter="booked" onclick="candidates_setFilter('booked', this)">Booked</button>
+          <button type="button" class="chip" data-filter="all" onclick="candidates_setFilter('all', this)">All</button>
         </div>
 
         <!-- Candidate list -->
@@ -544,10 +561,23 @@
        FEATURE: CANDIDATES
        Data shape: [{ id, name, mobile, email, cvDate, cvLocation,
                        s1Done, s1Date, outcome, notes,
+                       fitRating, fitNotes,
                        startDate, startTime, s3Done, s3Date,
                        s4Done, s4Date, createdAt }]
+       outcome: '' | 'callback' | 'not-interested' | 'not-booked' | 'booked'
+       fitRating: '' | 'low' | 'medium' | 'high'
     ============================================================ */
     const CANDIDATES_KEY = 'mella_candidates';
+
+    // Pipeline tab stage filter — defaults to "Not Touched" on first load
+    let pipelineFilter = 'not-touched';
+
+    function candidates_setFilter(value, btn) {
+      pipelineFilter = value;
+      document.querySelectorAll('#filter-chips .chip').forEach(b => b.classList.remove('active'));
+      btn?.classList.add('active');
+      candidates_render();
+    }
 
     function candidates_get() {
       try { return JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]'); } catch { return []; }
@@ -572,7 +602,8 @@
         id: newId(), name, mobile, email,
         cvDate: todayISO(), cvLocation,
         s1Done: false, s1Date: '',
-        outcome: 'pending', notes: '',
+        outcome: '', notes: '',
+        fitRating: '', fitNotes: '',
         startDate: '', startTime: '',
         s3Done: false, s3Date: '',
         s4Done: false, s4Date: '',
@@ -613,6 +644,28 @@
       candidates_render();
     }
 
+    const FIT_META = {
+      low:    { label: 'Fit: Low',    badge: 'badge-grey' },
+      medium: { label: 'Fit: Medium', badge: 'badge-amber' },
+      high:   { label: 'Fit: High',   badge: 'badge-green' }
+    };
+
+    // Persists via candidate_field (no full re-render), then patches the name-row
+    // fit badge in place — same "don't lose focus" pattern as preview3/preview4.
+    function candidate_setFit(id, value) {
+      candidate_field(id, 'fitRating', value);
+      const badge = document.getElementById('fitbadge-' + id);
+      if (!badge) return;
+      if (value) {
+        badge.hidden = false;
+        badge.className = 'badge ' + FIT_META[value].badge;
+        badge.textContent = FIT_META[value].label;
+      } else {
+        badge.hidden = true;
+        badge.textContent = '';
+      }
+    }
+
     function candidate_toggleDone(id, stepKey, checked) {
       const items = candidates_get();
       const item = items.find(i => i.id === id);
@@ -645,22 +698,36 @@
       candidates_render();
     }
 
+    // Fine-grained per-candidate category — drives the card badge/rail colour.
     const CATEGORY_META = {
-      'awaiting-contact': { label: 'Awaiting contact', badge: 'badge-grey', rail: '' },
-      'awaiting-call':    { label: 'Message sent — awaiting call', badge: 'badge-purple', rail: 'amber' },
-      'not-interested':   { label: 'Not interested', badge: 'badge-red', rail: 'red' },
-      'interested':       { label: 'Interested — awaiting start', badge: 'badge-purple', rail: 'purple' },
-      'confirmed':        { label: 'Start confirmed', badge: 'badge-green', rail: 'green' },
-      'started':          { label: 'Reminder sent', badge: 'badge-green', rail: 'green' }
+      'not-touched':    { label: 'Not touched', badge: 'badge-grey', rail: '' },
+      'messaged':       { label: 'Messaged — awaiting call', badge: 'badge-amber', rail: 'amber' },
+      'callback':       { label: 'Callback needed', badge: 'badge-amber', rail: 'amber' },
+      'not-interested': { label: 'Not interested', badge: 'badge-red', rail: 'red' },
+      'not-booked':     { label: 'Not booked', badge: 'badge-purple', rail: 'purple' },
+      'booked':         { label: 'Booked', badge: 'badge-green', rail: 'green' },
+      'confirmed':      { label: 'Start confirmed', badge: 'badge-green', rail: 'green' },
+      'started':        { label: 'Reminder sent', badge: 'badge-green', rail: 'green' }
     };
 
+    // Maps a fine-grained category down to the four Pipeline-tab stage filters.
+    function stageOf(cat) {
+      if (cat === 'not-touched') return 'not-touched';
+      if (cat === 'messaged') return 'messaged';
+      if (cat === 'callback' || cat === 'not-interested' || cat === 'not-booked') return 'called';
+      return 'booked'; // 'booked', 'confirmed', 'started'
+    }
+
     function categoryOf(c) {
+      if (!c.s1Done) return 'not-touched';
+      if (!c.outcome) return 'messaged';
+      if (c.outcome === 'callback') return 'callback';
+      if (c.outcome === 'not-interested') return 'not-interested';
+      if (c.outcome === 'not-booked') return 'not-booked';
+      // outcome === 'booked' from here on
       if (c.s4Done) return 'started';
       if (c.s3Done) return 'confirmed';
-      if (c.outcome === 'interested') return 'interested';
-      if (c.outcome === 'not-interested') return 'not-interested';
-      if (c.s1Done) return 'awaiting-call';
-      return 'awaiting-contact';
+      return 'booked';
     }
 
     function escapeHtml(s) {
@@ -678,6 +745,7 @@
               <input class="name-input" value="${escapeHtml(c.name)}" placeholder="Candidate name"
                 oninput="candidate_field('${c.id}','name',this.value)">
               <span class="badge ${meta.badge}">${meta.label}</span>
+              <span class="badge ${c.fitRating ? FIT_META[c.fitRating].badge : 'badge-grey'}" id="fitbadge-${c.id}" ${c.fitRating ? '' : 'hidden'}>${c.fitRating ? FIT_META[c.fitRating].label : ''}</span>
               <button class="btn btn-danger btn-sm" onclick="candidate_delete('${c.id}')">✕</button>
             </div>
 
@@ -702,6 +770,20 @@
                 <input class="mini-input" type="text" value="${escapeHtml(c.cvLocation)}" placeholder="e.g. OneDrive / CVs / Smith_J.pdf"
                   oninput="candidate_field('${c.id}','cvLocation',this.value)">
               </div>
+              <div>
+                <label class="mini-label">Fit rating</label>
+                <select class="mini-input" onchange="candidate_setFit('${c.id}', this.value)">
+                  <option value="" ${!c.fitRating ? 'selected' : ''}>—</option>
+                  <option value="low" ${c.fitRating === 'low' ? 'selected' : ''}>Low</option>
+                  <option value="medium" ${c.fitRating === 'medium' ? 'selected' : ''}>Medium</option>
+                  <option value="high" ${c.fitRating === 'high' ? 'selected' : ''}>High</option>
+                </select>
+              </div>
+              <div class="wide">
+                <label class="mini-label">Fit notes</label>
+                <input class="mini-input" type="text" value="${escapeHtml(c.fitNotes)}" placeholder="e.g. good warehouse experience, needs own transport"
+                  oninput="candidate_field('${c.id}','fitNotes',this.value)">
+              </div>
             </div>
 
             <ol class="steps">
@@ -723,19 +805,21 @@
                   <span class="step-title">Call &amp; outcome</span>
                 </div>
                 <div class="outcome-row">
-                  <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="pending" ${c.outcome === 'pending' ? 'checked' : ''}
-                    onchange="candidate_setOutcome('${c.id}','pending')"> Pending</label>
+                  <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="callback" ${c.outcome === 'callback' ? 'checked' : ''}
+                    onchange="candidate_setOutcome('${c.id}','callback')"> Callback</label>
                   <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="not-interested" ${c.outcome === 'not-interested' ? 'checked' : ''}
                     onchange="candidate_setOutcome('${c.id}','not-interested')"> Not interested</label>
-                  <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="interested" ${c.outcome === 'interested' ? 'checked' : ''}
-                    onchange="candidate_setOutcome('${c.id}','interested')"> Interested</label>
+                  <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="not-booked" ${c.outcome === 'not-booked' ? 'checked' : ''}
+                    onchange="candidate_setOutcome('${c.id}','not-booked')"> Not booked</label>
+                  <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="booked" ${c.outcome === 'booked' ? 'checked' : ''}
+                    onchange="candidate_setOutcome('${c.id}','booked')"> Booked</label>
                 </div>
                 <div>
                   <label class="mini-label">Call notes</label>
                   <input class="mini-input" type="text" value="${escapeHtml(c.notes)}" placeholder="e.g. left voicemail, will call back Thurs"
                     oninput="candidate_field('${c.id}','notes',this.value)">
                 </div>
-                <div class="start-fields" ${c.outcome === 'interested' ? '' : 'hidden'}>
+                <div class="start-fields" ${c.outcome === 'booked' ? '' : 'hidden'}>
                   <div>
                     <label class="mini-label">Start date</label>
                     <input class="mini-input" type="date" value="${c.startDate || ''}"
@@ -785,11 +869,11 @@
       if (!list) return;
       const all = candidates_get();
       const q = (document.getElementById('search-box')?.value || '').trim().toLowerCase();
-      const filter = document.getElementById('filter-select')?.value || 'all';
+      const filter = pipelineFilter || 'all';
 
       const filtered = all.filter(c => {
         const cat = categoryOf(c);
-        const matchesFilter = filter === 'all' || cat === filter;
+        const matchesFilter = filter === 'all' || stageOf(cat) === filter;
         const matchesSearch = !q ||
           (c.name || '').toLowerCase().includes(q) ||
           (c.mobile || '').toLowerCase().includes(q) ||
@@ -809,19 +893,16 @@
     ============================================================ */
     function renderOverview() {
       const items = candidates_get();
-      const counts = { awaiting: 0, interested: 0, confirmed: 0, notInterested: 0 };
+      const counts = { 'not-touched': 0, messaged: 0, called: 0, booked: 0 };
       items.forEach(c => {
-        const cat = categoryOf(c);
-        if (cat === 'awaiting-contact' || cat === 'awaiting-call') counts.awaiting++;
-        if (cat === 'interested') counts.interested++;
-        if (cat === 'confirmed' || cat === 'started') counts.confirmed++;
-        if (cat === 'not-interested') counts.notInterested++;
+        const stage = stageOf(categoryOf(c));
+        counts[stage]++;
       });
 
-      document.getElementById('ov-awaiting').textContent = counts.awaiting;
-      document.getElementById('ov-interested').textContent = counts.interested;
-      document.getElementById('ov-confirmed').textContent = counts.confirmed;
-      document.getElementById('ov-notinterested').textContent = counts.notInterested;
+      document.getElementById('ov-nottouched').textContent = counts['not-touched'];
+      document.getElementById('ov-messaged').textContent = counts.messaged;
+      document.getElementById('ov-called').textContent = counts.called;
+      document.getElementById('ov-booked').textContent = counts.booked;
 
       const recent = document.getElementById('ov-recent');
       if (!recent) return;
