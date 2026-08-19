@@ -1325,13 +1325,13 @@
       const item = items.find(i => i.id === id);
       if (!item) return;
       item.attendance = value;
-      item.attendanceDate = todayISO();
+      item.attendanceDate = value ? todayISO() : ''; // clearing back to pending clears the date too, not "today"
       candidates_save(items);
       attendance_render();
       renderOverview();
       renderDetailModal();
       vault_render();
-      showToast(value === 'showed' ? 'Marked as showed up' : 'Marked as no-show');
+      showToast(value === 'showed' ? 'Marked as showed up' : value === 'no-show' ? 'Marked as no-show' : 'Reset to pending');
     }
 
     // Compact attendance control shared by candidateCardHTML() (so it's
@@ -1347,7 +1347,8 @@
           <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
             <button class="btn btn-sm ${c.attendance === 'showed' ? 'btn-green' : 'btn-ghost'}" onclick="candidate_setAttendance('${c.id}','showed')">✓ Showed up</button>
             <button class="btn btn-sm ${c.attendance === 'no-show' ? 'btn-danger' : 'btn-ghost'}" onclick="candidate_setAttendance('${c.id}','no-show')">✗ No show</button>
-            ${c.attendance ? `<span class="badge ${ATTENDANCE_META[c.attendance].badge}">${ATTENDANCE_META[c.attendance].label}</span>` : ''}
+            ${c.attendance ? `<span class="badge ${ATTENDANCE_META[c.attendance].badge}">${ATTENDANCE_META[c.attendance].label}</span>
+            <button class="btn btn-ghost btn-sm" title="Clicked in error? Reset back to pending" onclick="candidate_setAttendance('${c.id}','')">↺ Reset</button>` : ''}
           </div>
         </div>
       `;
@@ -2703,7 +2704,11 @@
               <button class="btn btn-green btn-sm" onclick="event.stopPropagation(); candidate_setAttendance('${c.id}','showed')">✓ Showed up</button>
               <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); candidate_setAttendance('${c.id}','no-show')">✗ No show</button>
             </div>
-          ` : ''}
+          ` : `
+            <div class="starter-card-actions">
+              <button class="btn btn-ghost btn-sm" title="Clicked in error? Reset back to pending" onclick="event.stopPropagation(); candidate_setAttendance('${c.id}','')">↺ Reset</button>
+            </div>
+          `}
         </div>
       `;
     }
