@@ -2303,13 +2303,27 @@
       'WORK EXPERIENCE', 'EMPLOYMENT HISTORY', 'EXPERIENCE', 'EDUCATION', 'QUALIFICATIONS', 'SKILLS',
       'KEY SKILLS', 'TRAINING', 'CERTIFICATIONS', 'REFERENCES', 'ACHIEVEMENTS', 'HOBBIES', 'INTERESTS'
     ]);
-    const CV_NAME_SHAPE_RE = /^[A-Z][A-Za-z'-]{1,20}(\s[A-Z][A-Za-z'-]{1,20}){1,3}$/;
+    // Letter class includes accented characters (é, ü, ñ, etc.) — plain
+    // A-Za-z alone rejects a real fraction of real names outright.
+    const CV_NAME_WORD = "[A-Za-zÀ-ÖØ-öø-ÿ'-]{1,20}";
+    // Whole-line match: the entire trimmed line is just the name (the
+    // common case — a name on its own line).
+    const CV_NAME_SHAPE_RE = new RegExp('^' + CV_NAME_WORD + '(\\s' + CV_NAME_WORD + '){1,3}$');
+    // Prefix match: the line STARTS with a name-shaped run of 2-4 words,
+    // followed by whitespace and something else — covers CVs where PDF.js's
+    // line-break detection merges the name onto the same extracted line as
+    // a job title or heading (common with template-heavy/multi-column CVs,
+    // where hasEOL isn't set between visually-separate text boxes).
+    const CV_NAME_PREFIX_RE = new RegExp('^(' + CV_NAME_WORD + '(\\s' + CV_NAME_WORD + '){1,3})\\s');
 
     function cv_looksLikeName(line) {
       const trimmed = line.trim();
-      if (!trimmed) return false;
-      if (CV_NAME_BLACKLIST.has(trimmed.toUpperCase())) return false;
-      return CV_NAME_SHAPE_RE.test(trimmed);
+      if (!trimmed) return '';
+      if (CV_NAME_BLACKLIST.has(trimmed.toUpperCase())) return '';
+      if (CV_NAME_SHAPE_RE.test(trimmed)) return trimmed;
+      const prefixMatch = CV_NAME_PREFIX_RE.exec(trimmed);
+      if (prefixMatch && !CV_NAME_BLACKLIST.has(prefixMatch[1].toUpperCase())) return prefixMatch[1];
+      return '';
     }
 
     function cv_guessName(text) {
@@ -2338,7 +2352,8 @@
         seen.add(line);
         const prevLine = i > 0 ? lines[i - 1].toUpperCase() : '';
         if (CV_NAME_CONTEXT_HEADINGS.has(prevLine)) continue; // job title/institution right after a content heading
-        if (cv_looksLikeName(line)) return line;
+        const match = cv_looksLikeName(line);
+        if (match) return match;
       }
       return '';
     }
@@ -2346,13 +2361,18 @@
     function cv_parse(text, filename) {
       const emailMatch = text.match(CV_EMAIL_RE);
       const mobileMatch = text.match(CV_MOBILE_RE);
+      const name = cv_guessName(text);
       return {
         _uid: newId(),
-        name: cv_guessName(text),
+        name,
         mobile: mobileMatch ? mobileMatch[0].replace(/\s+/g, '') : '',
         email: emailMatch ? emailMatch[0] : '',
         filename,
-        error: ''
+        // Not a hard failure (mobile/email may still be usable) — just a
+        // visible heads-up so a blank Name field doesn't look like the
+        // review card silently did nothing. See cv_looksLikeName() for why
+        // this happens on some CV templates.
+        error: name ? '' : 'Couldn’t confidently detect a name from this CV — please check/enter it below.'
       };
     }
 
