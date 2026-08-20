@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="To Do List" />
+  <meta name="theme-color" content="#404040" />
+  <title>Clare Rendle To Do List</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Gothic+A1:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <!-- Supabase CDN — cross-device sync (same project as the Candidate Pipeline tracker) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+  <style>
+    /* ===================== TOKENS ===================== */
+    /* Palette pulled from reflectionshair.co.uk: white page, charcoal
+       header/footer bars (#404040), black text, light neutral greys —
+       a plain black/white/grey look rather than a bright brand colour. */
+    :root {
+      --bg:          #f4f4f4;
+      --surface:     #ffffff;
+      --surface-2:   #ededed;
+      --text:        #1a1a1a;
+      --label:       #6c757d;
+      --border:      #dcdcdc;
+      --accent:      #404040;
+      --accent-strong: #262626;
+      --accent-ink:  #404040;
+      --green:       #3f8f5f;
+      --red:         #c9503b;
+      --amber:       #b8860b;
+      --radius:      14px;
+      --font:        'Gothic A1', sans-serif;
+      --font-display:'Gothic A1', sans-serif;
+      --shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 22px rgba(0,0,0,.06);
+      --shadow-hover: 0 3px 8px rgba(0,0,0,.09), 0 14px 28px rgba(0,0,0,.1);
+      --ease-out:    cubic-bezier(.16,1,.3,1);
+      --ease-spring: cubic-bezier(.34,1.56,.64,1);
+    }
+
+    /* ===================== RESET ===================== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); font-family: var(--font); color: var(--text); font-size: 15px; }
+    button { cursor: pointer; font-family: var(--font); }
+    a { color: var(--accent-ink); }
+    input, select, textarea {
+      font-family: var(--font);
+      font-size: 14px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: var(--surface);
+      color: var(--text);
+      width: 100%;
+      outline: none;
+      transition: border-color .15s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+
+    /* ===================== SHELL / SIDEBAR ===================== */
+    .shell { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 240px;
+      flex: none;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+      padding: 22px 16px;
+      background: var(--surface-2);
+      border-right: 1.5px solid var(--border);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+    .sidebar-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+    .content { flex: 1; min-width: 0; }
+
+    /* ===================== HEADER ===================== */
+    .header-title-wrap { display: flex; align-items: center; gap: 12px; }
+    .header-text { flex: 1; min-width: 0; }
+    .header-mark {
+      width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center;
+      background: #ffffff;
+      border: 1.5px solid var(--border);
+      border-radius: 12px;
+      flex-shrink: 0;
+    }
+    .header-mark svg { width: 20px; height: 20px; display: block; }
+    .header-title { font-family: var(--font-display); font-size: 21px; font-weight: 600; letter-spacing: -.01em; }
+    .header-sub { font-size: 12px; color: var(--label); margin-top: 1px; }
+    .sync-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #d1d5db;
+      display: inline-block;
+      flex-shrink: 0;
+      margin-left: auto;
+      transition: background-color .3s, box-shadow .3s;
+      box-shadow: 0 0 0 0 rgba(0,0,0,0);
+    }
+    .sync-dot.sync-ok   { background: #059669; box-shadow: 0 0 0 3px rgba(5,150,105,.16); }
+    .sync-dot.sync-fail { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,.16); }
+    .sync-dot.sync-ok.sync-pulse   { animation: syncPulseOk .9s var(--ease-out); }
+    .sync-dot.sync-fail.sync-pulse { animation: syncPulseFail .9s var(--ease-out); }
+    @keyframes syncPulseOk {
+      0%   { box-shadow: 0 0 0 0 rgba(5,150,105,.5); }
+      70%  { box-shadow: 0 0 0 8px rgba(5,150,105,0); }
+      100% { box-shadow: 0 0 0 3px rgba(5,150,105,.16); }
+    }
+    @keyframes syncPulseFail {
+      0%   { box-shadow: 0 0 0 0 rgba(239,68,68,.5); }
+      70%  { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+      100% { box-shadow: 0 0 0 3px rgba(239,68,68,.16); }
+    }
+
+    /* ===================== PASSCODE GATE =====================
+       Soft privacy screen for the published URL — not real security
+       (it's plain client-side JS, viewable in page source), just a
+       deterrent against a link being opened by someone other than
+       Clare. Unlock is remembered on-device via localStorage. */
+    .gate-overlay {
+      position: fixed; inset: 0; z-index: 1000;
+      background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .gate-box {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-hover);
+      padding: 32px 28px;
+      max-width: 300px;
+      width: 100%;
+      text-align: center;
+    }
+    .gate-box .header-mark { margin: 0 auto 16px; }
+    .gate-title { font-family: var(--font-display); font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+    .gate-sub { font-size: 13px; color: var(--label); margin-bottom: 18px; }
+    .gate-box input { text-align: center; letter-spacing: .2em; margin-bottom: 12px; }
+    .gate-error { color: var(--red); font-size: 12px; margin-top: 4px; }
+
+    /* ===================== NAV TABS ===================== */
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      flex-shrink: 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1.5px solid transparent;
+      background: transparent;
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--label);
+      text-align: left;
+      transition: all .15s;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .tab:hover:not(.active) { background: var(--surface); border-color: var(--border); }
+    .tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .nav-icon { font-size: 15px; flex: none; width: 18px; text-align: center; }
+    .nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ===================== SECTIONS ===================== */
+    .main { max-width: 1120px; padding: 28px 36px 60px; }
+    .section { display: none; }
+    .section.active {
+      display: block;
+      animation: sectionIn .28s var(--ease-out);
+    }
+    @keyframes sectionIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .section-header { margin-bottom: 20px; }
+    .section-header h2 { font-family: var(--font-display); font-size: 23px; font-weight: 600; margin-bottom: 5px; letter-spacing: -.01em; }
+    .section-header p { font-size: 13px; color: var(--label); }
+
+    /* ===================== CARDS ===================== */
+    .card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      margin-bottom: 12px;
+      box-shadow: var(--shadow);
+    }
+    .card-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--label);
+      margin-bottom: 10px;
+    }
+
+    /* ===================== ATTENTION CARD (Overview — due/overdue) ===================== */
+    .needs-action-card { border-left: 4px solid var(--red); padding-left: 16px; }
+    .needs-action-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 9px 8px; margin: 0 -8px; border-bottom: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background-color .15s;
+    }
+    .needs-action-row:last-child { border-bottom: none; }
+    .needs-action-row:hover { background: var(--surface-2); }
+    .needs-action-name { font-size: 13px; font-weight: 600; }
+
+    /* ===================== DIVISION BREAKDOWN ROW (Overview) ===================== */
+    .division-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 10px 8px; margin: 0 -8px; border-bottom: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background-color .15s;
+    }
+    .division-row:last-child { border-bottom: none; }
+    .division-row:hover { background: var(--surface-2); }
+    .division-row-name { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .division-row-counts { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+
+    /* ===================== STAT BOXES ===================== */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    @media (min-width: 700px) {
+      .stats-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+    .stat-box {
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      text-align: center;
+    }
+    .stat-box .stat-label { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+    .stat-box .stat-value { font-size: 24px; font-weight: 700; }
+    .stat-box.green  { background: #dcf0e3; border: 1.5px solid #b7ddc4; }
+    .stat-box.green  .stat-label { color: #205a3c; }
+    .stat-box.green  .stat-value { color: var(--green); }
+    .stat-box.amber  { background: #f5e9c8; border: 1.5px solid #e6d18f; }
+    .stat-box.amber  .stat-label { color: #7a5c00; }
+    .stat-box.amber  .stat-value { color: var(--amber); }
+    .stat-box.purple { background: #eaeaea; border: 1.5px solid #d3d3d3; }
+    .stat-box.purple .stat-label { color: #333333; }
+    .stat-box.purple .stat-value { color: var(--accent-ink); }
+    .stat-box.red    { background: #fbeae6; border: 1.5px solid #edc3b8; }
+    .stat-box.red    .stat-label { color: #8a3221; }
+    .stat-box.red    .stat-value { color: var(--red); }
+
+    /* ===================== FORM ===================== */
+    .form-block {
+      background: var(--surface-2);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      margin-bottom: 20px;
+    }
+    .form-block-title { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+    .form-grid { display: grid; gap: 10px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label.field-label { display: block; font-size: 12px; font-weight: 600; color: var(--label); margin-bottom: 4px; }
+    .btn {
+      border: none;
+      border-radius: 999px;
+      padding: 10px 22px;
+      font-size: 13px;
+      font-weight: 700;
+      font-family: var(--font);
+      transition: opacity .15s, transform .1s;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .btn:hover { opacity: .88; }
+    .btn:active { transform: scale(.98); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-green   { background: var(--green);  color: #fff; }
+    .btn-danger  { background: #fbeae6; color: #8a2f1f; }
+    .btn-ghost   { background: var(--surface-2); color: var(--text); border: 1.5px solid var(--border); }
+    .btn-sm { padding: 5px 12px; font-size: 11px; }
+    .btn-block { width: 100%; }
+
+    /* ===================== BADGES ===================== */
+    .badge {
+      display: inline-block;
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge-green  { background: #dcf0e3; color: #205a3c; }
+    .badge-amber  { background: #f5e9c8; color: #7a5c00; }
+    .badge-red    { background: #fbeae6; color: #8a2f1f; }
+    .badge-purple { background: #eaeaea; color: var(--accent-ink); }
+    .badge-grey   { background: var(--surface-2); color: #55524a; }
+
+    /* ===================== EMPTY STATE ===================== */
+    .empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--label);
+      font-size: 14px;
+      gap: 3px;
+    }
+    .empty-icon {
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      background: var(--surface-2);
+      border: 1.5px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+      margin-bottom: 8px;
+    }
+    .empty-title { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); }
+    .empty-sub { font-size: 12.5px; color: var(--label); max-width: 320px; line-height: 1.5; }
+
+    /* ===================== TASK ROW ===================== */
+    .task-row {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+      box-shadow: var(--shadow);
+    }
+    .task-row.done { opacity: .6; }
+    .task-row.editing { align-items: flex-start; border-color: var(--accent); }
+    .task-row.editing .task-row-main { min-width: 220px; }
+    .task-row-main { flex: 1; min-width: 140px; }
+    .task-row-title { font-size: 14px; font-weight: 700; color: var(--text); }
+    .task-row-title.done { text-decoration: line-through; color: var(--label); }
+    .task-row-sub { font-size: 11.5px; color: var(--label); margin-top: 2px; }
+    .task-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+
+    /* ===================== MOBILE (phone-app layout) =====================
+       Below 840px the sidebar splits into two fixed bars, iOS/Android
+       app-style: a slim header pinned to the top and an icon+label tab
+       strip pinned to the bottom (thumb reach). Both respect notch/home-
+       indicator safe areas via env(safe-area-inset-*), which only take
+       effect because the viewport meta above sets viewport-fit=cover. */
+    @media (max-width: 840px) {
+      .shell { display: block; }
+      .sidebar {
+        width: 100%;
+        position: static;
+        height: auto;
+        padding: 0;
+        gap: 0;
+        background: transparent;
+        border-right: none;
+        overflow: visible;
+      }
+      .header-title-wrap {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        z-index: 40;
+        background: var(--surface-2);
+        border-bottom: 1.5px solid var(--border);
+        padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+      }
+      .content { padding-top: var(--topbar-h, 76px); }
+      .sidebar-nav {
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        z-index: 40;
+        flex-direction: row;
+        gap: 2px;
+        background: var(--surface);
+        border-top: 1.5px solid var(--border);
+        padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
+      }
+      .tab {
+        flex-direction: column;
+        justify-content: center;
+        gap: 2px;
+        width: auto;
+        flex: 1 1 0;
+        min-width: 0;
+        padding: 6px 2px;
+        font-size: 10.5px;
+        text-align: center;
+        min-height: 44px;
+      }
+      .nav-icon { font-size: 18px; width: auto; }
+      .main { padding: 18px 16px calc(80px + env(safe-area-inset-bottom)); }
+      /* iOS Safari zooms the page on focus if an input's font-size is
+         under 16px — bump inputs up on touch-sized screens to prevent it. */
+      input, select, textarea { font-size: 16px; }
+      .btn-sm { padding: 7px 13px; min-height: 30px; }
+      .task-actions .btn { min-height: 34px; }
+    }
+    @media (max-width: 480px) {
+      .form-row { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- PASSCODE GATE -->
+  <div id="gate-overlay" class="gate-overlay">
+    <div class="gate-box">
+      <span class="header-mark" aria-hidden="true">
+        <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+          <g transform="translate(0,16) scale(0.003125,-0.003125)" fill="#1a1a1a" stroke="none">
+            <path d="M15 4748 c9 -454 9 -3835 0 -4291 l-6 -347 1110 0 1111 0 0 585 0
+            584 203 -152 c520 -391 1036 -697 1522 -905 158 -68 373 -141 485 -167 41 -9
+            89 -21 106 -25 16 -4 66 -7 110 -6 70 1 86 5 122 29 72 47 109 161 67 207 -23
+            25 -49 33 -230 70 -82 17 -154 32 -160 34 -5 1 -30 8 -55 15 -25 8 -49 14 -55
+            15 -111 24 -394 127 -615 223 -236 103 -650 315 -650 333 0 3 15 7 33 8 18 1
+            42 4 52 6 11 2 40 7 65 11 369 56 748 192 1010 362 437 284 702 666 819 1178
+            20 88 23 109 40 250 12 100 12 409 0 507 -15 126 -20 159 -29 203 -5 22 -12
+            56 -15 75 -3 19 -13 57 -21 85 -132 429 -317 697 -674 978 -86 68 -320 198
+            -460 254 -201 82 -446 149 -675 183 -44 7 -88 14 -98 16 -10 2 -52 6 -93 9
+            -42 4 -85 9 -97 13 -12 3 -676 7 -1475 9 l-1453 4 6 -353z m2755 118 c85 -4
+            166 -8 180 -10 14 -3 52 -7 85 -11 90 -9 116 -13 270 -40 17 -3 38 -8 47 -11
+            10 -3 30 -8 45 -10 71 -13 287 -78 348 -104 11 -5 65 -28 119 -51 98 -42 277
+            -144 334 -190 17 -13 45 -35 63 -49 105 -79 257 -245 336 -369 85 -131 179
+            -350 209 -482 2 -10 6 -29 9 -41 37 -150 49 -271 49 -478 1 -211 -13 -340 -54
+            -500 -169 -664 -672 -1113 -1450 -1294 -58 -13 -121 -27 -140 -30 -19 -3 -44
+            -8 -56 -10 -12 -2 -45 -7 -75 -11 -30 -3 -65 -8 -79 -10 -43 -8 -97 -14 -154
+            -16 -47 -2 -63 3 -111 32 -87 52 -312 224 -419 319 l-95 85 -1 1642 c0 1532 1
+            1642 17 1645 25 5 348 1 523 -6z"/>
+          </g>
+        </svg>
+      </span>
+      <div class="gate-title">Clare Rendle</div>
+      <div class="gate-sub">Enter passcode to open your to-do list</div>
+      <input type="password" inputmode="numeric" id="gate-input" placeholder="Passcode" autocomplete="off" />
+      <button class="btn btn-primary btn-block" onclick="checkGate()">Unlock</button>
+      <div id="gate-error" class="gate-error" hidden>Incorrect passcode — try again.</div>
+    </div>
+  </div>
+
+  <div class="shell">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="header-title-wrap">
+        <span class="header-mark" aria-hidden="true">
+          <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+            <g transform="translate(0,16) scale(0.003125,-0.003125)" fill="#1a1a1a" stroke="none">
+              <path d="M15 4748 c9 -454 9 -3835 0 -4291 l-6 -347 1110 0 1111 0 0 585 0
+              584 203 -152 c520 -391 1036 -697 1522 -905 158 -68 373 -141 485 -167 41 -9
+              89 -21 106 -25 16 -4 66 -7 110 -6 70 1 86 5 122 29 72 47 109 161 67 207 -23
+              25 -49 33 -230 70 -82 17 -154 32 -160 34 -5 1 -30 8 -55 15 -25 8 -49 14 -55
+              15 -111 24 -394 127 -615 223 -236 103 -650 315 -650 333 0 3 15 7 33 8 18 1
+              42 4 52 6 11 2 40 7 65 11 369 56 748 192 1010 362 437 284 702 666 819 1178
+              20 88 23 109 40 250 12 100 12 409 0 507 -15 126 -20 159 -29 203 -5 22 -12
+              56 -15 75 -3 19 -13 57 -21 85 -132 429 -317 697 -674 978 -86 68 -320 198
+              -460 254 -201 82 -446 149 -675 183 -44 7 -88 14 -98 16 -10 2 -52 6 -93 9
+              -42 4 -85 9 -97 13 -12 3 -676 7 -1475 9 l-1453 4 6 -353z m2755 118 c85 -4
+              166 -8 180 -10 14 -3 52 -7 85 -11 90 -9 116 -13 270 -40 17 -3 38 -8 47 -11
+              10 -3 30 -8 45 -10 71 -13 287 -78 348 -104 11 -5 65 -28 119 -51 98 -42 277
+              -144 334 -190 17 -13 45 -35 63 -49 105 -79 257 -245 336 -369 85 -131 179
+              -350 209 -482 2 -10 6 -29 9 -41 37 -150 49 -271 49 -478 1 -211 -13 -340 -54
+              -500 -169 -664 -672 -1113 -1450 -1294 -58 -13 -121 -27 -140 -30 -19 -3 -44
+              -8 -56 -10 -12 -2 -45 -7 -75 -11 -30 -3 -65 -8 -79 -10 -43 -8 -97 -14 -154
+              -16 -47 -2 -63 3 -111 32 -87 52 -312 224 -419 319 l-95 85 -1 1642 c0 1532 1
+              1642 17 1645 25 5 348 1 523 -6z"/>
+            </g>
+          </svg>
+        </span>
+        <div class="header-text">
+          <div class="header-title">Clare Rendle</div>
+          <div class="header-sub">To Do List</div>
+        </div>
+        <span id="sync-dot" class="sync-dot" title="Sync status"></span>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button id="tab-btn-overview" class="tab active" onclick="showTab('overview', this); renderOverview()"><span class="nav-icon">◎</span><span class="nav-label">Overview</span></button>
+        <button id="tab-btn-property" class="tab" onclick="showTab('property', this); todo_render('property')"><span class="nav-icon">🏠</span><span class="nav-label">Property</span></button>
+        <button id="tab-btn-salon" class="tab" onclick="showTab('salon', this); todo_render('salon')"><span class="nav-icon">💇</span><span class="nav-label">Salon</span></button>
+        <button id="tab-btn-finance" class="tab" onclick="showTab('finance', this); todo_render('finance')"><span class="nav-icon">💷</span><span class="nav-label">Finance</span></button>
+        <button id="tab-btn-training" class="tab" onclick="showTab('training', this); todo_render('training')"><span class="nav-icon">🎓</span><span class="nav-label">Training</span></button>
+        <button id="tab-btn-company" class="tab" onclick="showTab('company', this); todo_render('company')"><span class="nav-icon">🏢</span><span class="nav-label">Company</span></button>
+        <button id="tab-btn-personal" class="tab" onclick="showTab('personal', this); todo_render('personal')"><span class="nav-icon">🌿</span><span class="nav-label">Personal</span></button>
+      </nav>
+    </aside>
+
+    <!-- SECTIONS -->
+    <div class="content">
+      <div class="main">
+
+        <!-- ===== OVERVIEW ===== -->
+        <div id="overview" class="section active">
+          <div class="section-header">
+            <h2>Overview</h2>
+            <p>Everything on your plate, across every division</p>
+          </div>
+
+          <div class="stats-grid">
+            <div class="stat-box green">
+              <div class="stat-label">Total Tasks</div>
+              <div class="stat-value" id="ov-total">0</div>
+            </div>
+            <div class="stat-box amber">
+              <div class="stat-label">Active</div>
+              <div class="stat-value" id="ov-active">0</div>
+            </div>
+            <div class="stat-box purple">
+              <div class="stat-label">Done</div>
+              <div class="stat-value" id="ov-done">0</div>
+            </div>
+            <div class="stat-box red">
+              <div class="stat-label">Overdue</div>
+              <div class="stat-value" id="ov-overdue">0</div>
+            </div>
+          </div>
+
+          <div id="ov-attention-wrap"></div>
+
+          <div class="card">
+            <div class="card-label">By Division</div>
+            <div id="ov-divisions"></div>
+          </div>
+        </div>
+
+        <!-- ===== PROPERTY DIVISION ===== -->
+        <div id="property" class="section">
+          <div class="section-header">
+            <h2>Property Division</h2>
+            <p>Property-related tasks and admin</p>
+          </div>
+          <div class="form-block">
+            <div class="form-block-title">Add a Task</div>
+            <div class="form-grid">
+              <div>
+                <label class="field-label">Task</label>
+                <input type="text" id="property-label" placeholder="What needs doing?" />
+              </div>
+              <div class="form-row">
+                <div>
+                  <label class="field-label">Due date (optional)</label>
+                  <input type="date" id="property-due" />
+                </div>
+                <div>
+                  <label class="field-label">Note (optional)</label>
+                  <input type="text" id="property-note" placeholder="Any details..." />
+                </div>
+              </div>
+              <button class="btn btn-primary" onclick="todo_add('property')">+ Add Task</button>
+            </div>
+          </div>
+          <div id="property-list"></div>
+        </div>
+
+        <!-- ===== SALON DIVISION ===== -->
+        <div id="salon" class="section">
+          <div class="section-header">
+            <h2>Salon Division</h2>
+            <p>Salon operations and tasks</p>
+          </div>
+          <div class="form-block">
+            <div class="form-block-title">Add a Task</div>
+            <div class="form-grid">
+              <div>
+                <label class="field-label">Task</label>
+                <input type="text" id="salon-label" placeholder="What needs doing?" />
+              </div>
+              <div class="form-row">
+                <div>
+                  <label class="field-label">Due date (optional)</label>
+                  <input type="date" id="salon-due" />
+                </div>
+                <div>
+                  <label class="field-label">Note (optional)</label>
+                  <input type="text" id="salon-note" placeholder="Any details..." />
+                </div>
+              </div>
+              <button class="btn btn-primary" onclick="todo_add('salon')">+ Add Task</button>
+            </div>
+          </div>
+          <div id="salon-list"></div>
+        </div>
+
+        <!-- ===== FINANCE ===== -->
+        <div id="finance" class="section">
+          <div class="section-header">
+            <h2>Finance</h2>
+            <p>Financial admin and tasks</p>
+          </div>
+          <div class="form-block">
+            <div class="form-block-title">Add a Task</div>
+            <div class="form-grid">
+              <div>
+                <label class="field-label">Task</label>
+                <input type="text" id="finance-label" placeholder="What needs doing?" />
+              </div>
+              <div class="form-row">
+                <div>
+                  <label class="field-label">Due date (optional)</label>
+                  <input type="date" id="finance-due" />
+                </div>
+                <div>
+                  <label class="field-label">Note (optional)</label>
+                  <input type="text" id="finance-note" placeholder="Any details..." />
+                </div>
+              </div>
+              <button class="btn btn-primary" onclick="todo_add('finance')">+ Add Task</button>
+            </div>
+          </div>
+          <div id="finance-list"></div>
+        </div>
+
+        <!-- ===== TRAINING DIVISION ===== -->
+        <div id="training" class="section">
+          <div class="section-header">
+            <h2>Training Division</h2>
+            <p>Training division tasks</p>
+          </div>
+          <div class="form-block">
+            <div class="form-block-title">Add a Task</div>
+            <div class="form-grid">
+              <div>
+                <label class="field-label">Task</label>
+                <input type="text" id="training-label" placeholder="What needs doing?" />
+              </div>
+              <div class="form-row">
+                <div>
+                  <label class="field-label">Due date (optional)</label>
+                  <input type="date" id="training-due" />
+                </div>
+                <div>
+                  <label class="field-label">Note (optional)</label>
+                  <input type="text" id="training-note" placeholder="Any details..." />
+                </div>
+              </div>
+              <button class="btn btn-primary" onclick="todo_add('training')">+ Add Task</button>
+            </div>
+          </div>
+          <div id="training-list"></div>
+        </div>
+
+        <!-- ===== COMPANY DIVISION ===== -->
+        <div id="company" class="section">
+          <div class="section-header">
+            <h2>Company Division</h2>
+            <p>Company-wide tasks</p>
+          </div>
+          <div class="form-block">
+            <div class="form-block-title">Add a Task</div>
+            <div class="form-grid">
+              <div>
+                <label class="field-label">Task</label>
+                <input type="text" id="company-label" placeholder="What needs doing?" />
+              </div>
+              <div class="form-row">
+                <div>
+                  <label class="field-label">Due date (optional)</label>
+                  <input type="date" id="company-due" />
+                </div>
+                <div>
+                  <label class="field-label">Note (optional)</label>
+                  <input type="text" id="company-note" placeholder="Any details..." />
+                </div>
+              </div>
+              <button class="btn btn-primary" onclick="todo_add('company')">+ Add Task</button>
+            </div>
+          </div>
+          <div id="company-list"></div>
+        </div>
+
+        <!-- ===== PERSONAL ===== -->
+        <div id="personal" class="section">
+          <div class="section-header">
+            <h2>Personal</h2>
+            <p>Just for you</p>
+          </div>
+          <div class="form-block">
+            <div class="form-block-title">Add a Task</div>
+            <div class="form-grid">
+              <div>
+                <label class="field-label">Task</label>
+                <input type="text" id="personal-label" placeholder="What needs doing?" />
+              </div>
+              <div class="form-row">
+                <div>
+                  <label class="field-label">Due date (optional)</label>
+                  <input type="date" id="personal-due" />
+                </div>
+                <div>
+                  <label class="field-label">Note (optional)</label>
+                  <input type="text" id="personal-note" placeholder="Any details..." />
+                </div>
+              </div>
+              <button class="btn btn-primary" onclick="todo_add('personal')">+ Add Task</button>
+            </div>
+          </div>
+          <div id="personal-list"></div>
+        </div>
+
+      </div><!-- /main -->
+    </div><!-- /content -->
+  </div><!-- /shell -->
+
+  <script>
+    /* ============================================================
+       SUPABASE — same project as the Candidate Pipeline tracker,
+       distinct 'todo_*' keys so nothing collides with its data.
+    ============================================================ */
+    const SUPABASE_URL      = 'https://ttxokegaunuiwvjtpdnb.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0eG9rZWdhdW51aXd2anRwZG5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwNjQ3NTAsImV4cCI6MjEwMjY0MDc1MH0.1kDk4gvf8ud14AoddxuHTL3F2Bieqx8mGc5evlRK5Ew';
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const DIVISIONS = [
+      { key: 'property', label: 'Property Division' },
+      { key: 'salon',    label: 'Salon Division' },
+      { key: 'finance',  label: 'Finance' },
+      { key: 'training', label: 'Training Division' },
+      { key: 'company',  label: 'Company Division' },
+      { key: 'personal', label: 'Personal' },
+    ];
+
+    /* ============================================================
+       PASSCODE GATE
+    ============================================================ */
+    const GATE_KEY = 'todo_gate_unlocked';
+    const GATE_PASSCODE = '152015';
+
+    function checkGate() {
+      const val = (document.getElementById('gate-input')?.value || '').trim();
+      if (val === GATE_PASSCODE) {
+        try { localStorage.setItem(GATE_KEY, '1'); } catch {}
+        document.getElementById('gate-overlay').style.display = 'none';
+      } else {
+        document.getElementById('gate-error').hidden = false;
+        const input = document.getElementById('gate-input');
+        input.value = '';
+        input.focus();
+      }
+    }
+
+    function initGate() {
+      let unlocked = false;
+      try { unlocked = localStorage.getItem(GATE_KEY) === '1'; } catch {}
+      const overlay = document.getElementById('gate-overlay');
+      if (unlocked) {
+        overlay.style.display = 'none';
+      } else {
+        document.getElementById('gate-input')?.focus();
+      }
+      document.getElementById('gate-input')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') checkGate();
+      });
+    }
+
+    /* ============================================================
+       NAVIGATION
+    ============================================================ */
+    function showTab(id, btn) {
+      document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.getElementById(id)?.classList.add('active');
+      btn?.classList.add('active');
+    }
+
+    function goToDivision(key) {
+      showTab(key, document.getElementById('tab-btn-' + key));
+      todo_render(key);
+    }
+
+    /* ============================================================
+       SYNC DOT
+    ============================================================ */
+    function setSyncDot(ok) {
+      const dot = document.getElementById('sync-dot');
+      if (!dot) return;
+      dot.classList.remove('sync-ok', 'sync-fail', 'sync-pulse');
+      dot.classList.add(ok ? 'sync-ok' : 'sync-fail');
+      dot.title = ok ? 'Synced just now' : 'Sync error — changes are only saved on this device until it reconnects';
+      void dot.offsetWidth;
+      dot.classList.add('sync-pulse');
+    }
+
+    /* ============================================================
+       UTILITY
+    ============================================================ */
+    function newId() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    }
+
+    function todayISO() {
+      return new Date().toISOString().slice(0, 10);
+    }
+
+    function fmtDate(iso) {
+      if (!iso) return '';
+      return new Date(iso + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
+    function escapeAttr(s) {
+      return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    /* ============================================================
+       FEATURE: TASKS (one list per division)
+       Data shape: [{ id, label, note, dueDate, status, createdAt }]
+       status: 'active' | 'done'
+    ============================================================ */
+    function todo_key(divKey) { return 'todo_' + divKey; }
+
+    function todo_get(divKey) {
+      try { return JSON.parse(localStorage.getItem(todo_key(divKey)) || '[]'); } catch { return []; }
+    }
+
+    function todo_save(divKey, items) {
+      localStorage.setItem(todo_key(divKey), JSON.stringify(items));
+      sb.from('hub_data')
+        .upsert({ key: todo_key(divKey), value: items, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+        .then(({ error }) => setSyncDot(!error));
+    }
+
+    function todo_add(divKey) {
+      const label = (document.getElementById(divKey + '-label')?.value || '').trim();
+      const due   = document.getElementById(divKey + '-due')?.value || '';
+      const note  = (document.getElementById(divKey + '-note')?.value || '').trim();
+      if (!label) { alert('Please enter a task.'); return; }
+      const items = todo_get(divKey);
+      items.unshift({ id: newId(), label, note, dueDate: due, status: 'active', createdAt: new Date().toISOString() });
+      todo_save(divKey, items);
+      document.getElementById(divKey + '-label').value = '';
+      document.getElementById(divKey + '-due').value   = '';
+      document.getElementById(divKey + '-note').value  = '';
+      todo_render(divKey);
+      renderOverview();
+    }
+
+    function todo_setStatus(divKey, id, status) {
+      todo_save(divKey, todo_get(divKey).map(i => i.id === id ? { ...i, status } : i));
+      todo_render(divKey);
+      renderOverview();
+    }
+
+    function todo_delete(divKey, id) {
+      if (!confirm('Delete this task?')) return;
+      todo_save(divKey, todo_get(divKey).filter(i => i.id !== id));
+      todo_render(divKey);
+      renderOverview();
+    }
+
+    /* ============================================================
+       EDITING — a task row can be switched into an inline edit form
+       to change its label, note or due date after creation.
+    ============================================================ */
+    let editingTask = null; // { divKey, id } | null
+
+    function todo_startEdit(divKey, id) {
+      editingTask = { divKey, id };
+      todo_render(divKey);
+    }
+
+    function todo_cancelEdit(divKey) {
+      editingTask = null;
+      todo_render(divKey);
+    }
+
+    function todo_saveEdit(divKey, id) {
+      const label = (document.getElementById('edit-label-' + id)?.value || '').trim();
+      const note  = (document.getElementById('edit-note-' + id)?.value || '').trim();
+      const due   = document.getElementById('edit-due-' + id)?.value || '';
+      if (!label) { alert('Task can\'t be empty.'); return; }
+      todo_save(divKey, todo_get(divKey).map(i => i.id === id ? { ...i, label, note, dueDate: due } : i));
+      editingTask = null;
+      todo_render(divKey);
+      renderOverview();
+    }
+
+    function todo_render(divKey) {
+      const list = document.getElementById(divKey + '-list');
+      if (!list) return;
+      const items = todo_get(divKey);
+      if (!items.length) {
+        list.innerHTML = `
+          <div class="empty">
+            <div class="empty-icon" aria-hidden="true">📋</div>
+            <div class="empty-title">Nothing on the list</div>
+            <div class="empty-sub">Add a task above to get started.</div>
+          </div>`;
+        return;
+      }
+
+      const today = todayISO();
+      // Active first (soonest due date first, undated last), then done — most recent first within each group.
+      const sorted = [...items].sort((a, b) => {
+        if (a.status !== b.status) return a.status === 'active' ? -1 : 1;
+        if (a.status === 'active') {
+          if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+          if (a.dueDate) return -1;
+          if (b.dueDate) return 1;
+        }
+        return b.createdAt.localeCompare(a.createdAt);
+      });
+
+      list.innerHTML = sorted.map(item => {
+        if (editingTask && editingTask.divKey === divKey && editingTask.id === item.id) {
+          return `
+          <div class="task-row editing">
+            <div class="task-row-main">
+              <div class="form-grid" style="gap:8px;">
+                <input type="text" id="edit-label-${item.id}" value="${escapeAttr(item.label)}" placeholder="Task" />
+                <div class="form-row">
+                  <input type="date" id="edit-due-${item.id}" value="${item.dueDate || ''}" />
+                  <input type="text" id="edit-note-${item.id}" value="${escapeAttr(item.note)}" placeholder="Note (optional)" />
+                </div>
+              </div>
+            </div>
+            <div class="task-actions">
+              <button class="btn btn-green btn-sm" onclick="todo_saveEdit('${divKey}','${item.id}')">✓ Save</button>
+              <button class="btn btn-ghost btn-sm" onclick="todo_cancelEdit('${divKey}')">Cancel</button>
+            </div>
+          </div>`;
+        }
+        const isOverdue = item.status === 'active' && item.dueDate && item.dueDate < today;
+        const dueBadge = item.dueDate
+          ? `<span class="badge ${isOverdue ? 'badge-red' : 'badge-amber'}">${isOverdue ? 'Overdue · ' : 'Due '}${fmtDate(item.dueDate)}</span>`
+          : '';
+        return `
+        <div class="task-row ${item.status === 'done' ? 'done' : ''}">
+          <div class="task-row-main">
+            <div class="task-row-title ${item.status === 'done' ? 'done' : ''}">${item.label}</div>
+            <div class="task-row-sub">${item.note ? item.note + ' · ' : ''}Added ${fmtDate(item.createdAt.slice(0, 10))}</div>
+          </div>
+          ${dueBadge}
+          ${item.status === 'done' ? '<span class="badge badge-green">Done</span>' : ''}
+          <div class="task-actions">
+            ${item.status !== 'done'
+              ? `<button class="btn btn-green btn-sm" onclick="todo_setStatus('${divKey}','${item.id}','done')">✓ Done</button>`
+              : `<button class="btn btn-ghost btn-sm" onclick="todo_setStatus('${divKey}','${item.id}','active')">↺ Reopen</button>`
+            }
+            <button class="btn btn-ghost btn-sm" onclick="todo_startEdit('${divKey}','${item.id}')">✎ Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="todo_delete('${divKey}','${item.id}')">✕</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    /* ============================================================
+       OVERVIEW RENDER
+    ============================================================ */
+    function renderOverview() {
+      let total = 0, active = 0, done = 0, overdue = 0;
+      const today = todayISO();
+      const dueSoon = [];
+
+      DIVISIONS.forEach(div => {
+        const items = todo_get(div.key);
+        total += items.length;
+        items.forEach(i => {
+          if (i.status === 'done') { done++; return; }
+          active++;
+          if (i.dueDate && i.dueDate < today) overdue++;
+          if (i.dueDate) dueSoon.push({ ...i, divKey: div.key, divLabel: div.label });
+        });
+      });
+
+      document.getElementById('ov-total').textContent   = total;
+      document.getElementById('ov-active').textContent  = active;
+      document.getElementById('ov-done').textContent    = done;
+      document.getElementById('ov-overdue').textContent = overdue;
+
+      // Attention card — overdue and due-soon tasks across every division
+      const attentionWrap = document.getElementById('ov-attention-wrap');
+      dueSoon.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+      const flagged = dueSoon.filter(i => i.dueDate < today || i.dueDate <= new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10));
+      if (!flagged.length) {
+        attentionWrap.innerHTML = '';
+      } else {
+        attentionWrap.innerHTML = `
+          <div class="card needs-action-card">
+            <div class="card-label">Due &amp; Overdue</div>
+            ${flagged.slice(0, 8).map(i => {
+              const isOverdue = i.dueDate < today;
+              return `
+              <div class="needs-action-row" onclick="goToDivision('${i.divKey}')">
+                <span class="needs-action-name">${i.label} <span style="color:var(--label);font-weight:400;">— ${i.divLabel}</span></span>
+                <span class="badge ${isOverdue ? 'badge-red' : 'badge-amber'}">${isOverdue ? 'Overdue' : 'Due'} ${fmtDate(i.dueDate)}</span>
+              </div>`;
+            }).join('')}
+          </div>`;
+      }
+
+      // By-division breakdown
+      const divWrap = document.getElementById('ov-divisions');
+      divWrap.innerHTML = DIVISIONS.map(div => {
+        const items = todo_get(div.key);
+        const a = items.filter(i => i.status === 'active').length;
+        const d = items.filter(i => i.status === 'done').length;
+        return `
+        <div class="division-row" onclick="goToDivision('${div.key}')">
+          <span class="division-row-name">${div.label}</span>
+          <span class="division-row-counts">
+            <span class="badge badge-amber">${a} active</span>
+            <span class="badge badge-green">${d} done</span>
+          </span>
+        </div>`;
+      }).join('');
+    }
+
+    /* ============================================================
+       RENDER ALL
+    ============================================================ */
+    function renderAll() {
+      renderOverview();
+      DIVISIONS.forEach(div => todo_render(div.key));
+    }
+
+    /* ============================================================
+       SUPABASE SYNC
+    ============================================================ */
+    let syncSubscribed = false;
+    const ALL_KEYS = DIVISIONS.map(d => todo_key(d.key));
+
+    async function fetchRemote() {
+      const { data: rows, error } = await sb.from('hub_data').select('key, value').in('key', ALL_KEYS);
+      if (error || !rows) { setSyncDot(false); return; }
+
+      for (const row of rows) {
+        const remote = row.value;
+        const local  = localStorage.getItem(row.key);
+        const isEmpty = remote === null || remote === undefined || (Array.isArray(remote) && remote.length === 0);
+        const hasLocal = local && local !== '[]' && local !== '';
+        if (isEmpty && hasLocal) {
+          await sb.from('hub_data').upsert({ key: row.key, value: JSON.parse(local), updated_at: new Date().toISOString() });
+        } else if (!isEmpty) {
+          localStorage.setItem(row.key, JSON.stringify(remote));
+        }
+      }
+      setSyncDot(true);
+      renderAll();
+    }
+
+    function initSync() {
+      fetchRemote();
+      if (!syncSubscribed) {
+        syncSubscribed = true;
+        sb.channel('todo_sync')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'hub_data' }, payload => {
+            const { key, value } = payload.new || {};
+            if (!key || !ALL_KEYS.includes(key)) return;
+            localStorage.setItem(key, JSON.stringify(value));
+            renderAll();
+          })
+          .subscribe(status => setSyncDot(status === 'SUBSCRIBED'));
+      }
+    }
+
+    /* ============================================================
+       INIT
+    ============================================================ */
+    document.addEventListener('DOMContentLoaded', () => {
+      initGate();
+      renderAll();
+      initSync();
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) fetchRemote();
+      });
+    });
+  </script>
+</body>
+</html>
