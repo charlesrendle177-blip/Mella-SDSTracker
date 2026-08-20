@@ -808,11 +808,15 @@
         <button class="tab" onclick="showTab('vault', this); vault_render()"><span class="nav-icon">🗄</span> Vault</button>
         <button class="tab" onclick="showTab('attendance', this); attendance_render()"><span class="nav-icon">✅</span> Attendance</button>
         <button class="tab" onclick="showTab('script', this)"><span class="nav-icon">☎</span> Script</button>
+        <button class="tab" onclick="showTab('sequences', this)"><span class="nav-icon">✉</span> Sequences</button>
       </nav>
 
-      <div class="sidebar-footer">
-        <span id="sync-dot" class="sync-dot" title="Sync status"></span>
-        <span>SDS Limited</span>
+      <div class="sidebar-footer" style="flex-direction:column; align-items:stretch; gap:8px;">
+        <div style="display:flex; gap:6px;">
+          <span id="sync-dot" class="sync-dot" title="Sync status"></span>
+          <span>SDS Limited</span>
+        </div>
+        <div id="role-filter-bar" style="display:flex; gap:4px; flex-wrap:wrap;"></div>
       </div>
     </aside>
 
@@ -840,6 +844,10 @@
           <div class="stat-box purple">
             <div class="stat-label">Called</div>
             <div class="stat-value" id="ov-called">0</div>
+          </div>
+          <div class="stat-box amber">
+            <div class="stat-label">Interview</div>
+            <div class="stat-value" id="ov-interview">0</div>
           </div>
           <div class="stat-box green">
             <div class="stat-label">Booked</div>
@@ -877,6 +885,11 @@
         </div>
 
         <div class="form-block">
+          <div class="form-block-title">Role for this batch</div>
+          <select class="mini-input" id="cv-batch-role" onchange="cvBatchRole = this.value" style="margin-bottom:14px;">
+            <option value="manufacturing">Manufacturing Operative</option>
+            <option value="site">Site Operative</option>
+          </select>
           <div class="form-block-title">Select CV files (PDF, CSV or Excel)</div>
           <label class="cv-dropzone" for="cv-files"
             ondragover="event.preventDefault(); this.classList.add('drag')"
@@ -923,9 +936,18 @@
                 <input type="email" id="new-email" placeholder="name@example.com" />
               </div>
             </div>
-            <div>
-              <label class="field-label">CV location (optional)</label>
-              <input type="text" id="new-cvlocation" placeholder="e.g. OneDrive / CVs / Smith_J.pdf" />
+            <div class="form-row">
+              <div>
+                <label class="field-label">CV location (optional)</label>
+                <input type="text" id="new-cvlocation" placeholder="e.g. OneDrive / CVs / Smith_J.pdf" />
+              </div>
+              <div>
+                <label class="field-label">Role</label>
+                <select id="new-role">
+                  <option value="manufacturing">Manufacturing Operative</option>
+                  <option value="site">Site Operative</option>
+                </select>
+              </div>
             </div>
             <button class="btn btn-primary btn-block" onclick="candidates_add()">+ Add candidate</button>
           </div>
@@ -1010,6 +1032,15 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- ===== SEQUENCES ===== -->
+      <div id="sequences" class="section">
+        <div class="section-header">
+          <h2>Message Sequences</h2>
+          <p>Edit the wording and timing of every automated text — changes apply to messages scheduled from now on, not ones already queued</p>
+        </div>
+        <div id="sequences-editor"></div>
       </div>
 
     </div></div><!-- /main /content -->
@@ -1128,6 +1159,19 @@
       return weekday + ' ' + day + ' ' + month + ' ' + year + timePart;
     }
 
+    // UK mobile normalizer for Twilio (requires E.164). Accepts the two
+    // shapes candidates' numbers actually show up in — a leading 0 or a
+    // leading 44 — plus an already-normalized +44 number passed through
+    // unchanged. Returns null (never a guess) for anything else, so the
+    // caller can warn instead of silently queuing an unsendable message.
+    function phone_toE164(raw) {
+      const digits = String(raw || '').replace(/[^\d+]/g, '');
+      if (/^\+44\d{9,10}$/.test(digits)) return digits;
+      if (/^0\d{9,10}$/.test(digits)) return '+44' + digits.slice(1);
+      if (/^44\d{9,10}$/.test(digits)) return '+' + digits;
+      return null;
+    }
+
     const TEMPLATES = {
       '1': function () {
         return 'Hi - I have come across your CV online and I am keen to speak to you about a couple of roles I am recruiting for.\n\nWould there be a good time to call? Thanks Harry - Mella Recruitment';
@@ -1179,13 +1223,23 @@
 
     /* ============================================================
        FEATURE: CANDIDATES
-       Data shape: [{ id, name, mobile, email, cvDate, cvLocation,
+       Data shape: [{ id, name, mobile, email, cvDate, cvLocation, role,
                        s1Done, s1Date, outcome, outcomeDate, notes,
                        fitRating, fitNotes,
+                       interviewDate, interviewTime, interviewOutcome, interviewOutcomeDate,
+                       noAnswerCount, noAnswerLastAt, noAnswerActive,
                        startDate, startTime, s3Done, s3Date,
-                       s4Done, s4Date, attendance, attendanceDate, createdAt }]
-       outcome: '' | 'callback' | 'not-interested' | 'not-booked' | 'booked'
+                       s4Done, s4Date, attendance, attendanceDate, archived, cvFile, createdAt }]
+       role: 'manufacturing' | 'site' — which job req this candidate is for.
+       outcome: '' | 'callback' | 'not-interested' | 'not-booked' | 'interview' | 'booked'
+         'interview' is site-role-only — sits between a contact call and booking,
+         used instead of jumping straight to 'not-booked'/'booked'.
        fitRating: '' | 'low' | 'medium' | 'high'
+       interviewOutcome: '' | 'passed' | 'failed' | 'no-show' — site role only;
+         a site candidate can only reach outcome 'booked' once this is 'passed'.
+       noAnswerCount/noAnswerLastAt/noAnswerActive — tracks a "tried to call,
+         nobody picked up" event, distinct from any outcome; drives the
+         no-answer SMS chase sequence (see candidate_logNoAnswer()).
        attendance: '' | 'showed' | 'no-show' — whether a 'booked' candidate
          actually turned up for their first shift; see candidate_setAttendance()
     ============================================================ */
@@ -1201,6 +1255,17 @@
         items.forEach(c => {
           if (c.attendance === undefined) c.attendance = '';
           if (c.attendanceDate === undefined) c.attendanceDate = '';
+          // Every record saved before role tagging existed is manufacturing-
+          // operative SDS work — that's the only job this app ever tracked
+          // until the site-operative pipeline was added.
+          if (c.role === undefined) c.role = 'manufacturing';
+          if (c.interviewDate === undefined) c.interviewDate = '';
+          if (c.interviewTime === undefined) c.interviewTime = '';
+          if (c.interviewOutcome === undefined) c.interviewOutcome = '';
+          if (c.interviewOutcomeDate === undefined) c.interviewOutcomeDate = '';
+          if (c.noAnswerCount === undefined) c.noAnswerCount = 0;
+          if (c.noAnswerLastAt === undefined) c.noAnswerLastAt = '';
+          if (c.noAnswerActive === undefined) c.noAnswerActive = false;
         });
         return items;
       } catch { return []; }
@@ -1237,15 +1302,18 @@
       const mobile = (document.getElementById('new-mobile')?.value || '').trim();
       const email = (document.getElementById('new-email')?.value || '').trim();
       const cvLocation = (document.getElementById('new-cvlocation')?.value || '').trim();
+      const role = document.getElementById('new-role')?.value || 'manufacturing';
       if (!name) { alert('Please enter a candidate name.'); return; }
 
       const items = candidates_get();
       items.unshift({
-        id: newId(), name, mobile, email,
+        id: newId(), name, mobile, email, role,
         cvDate: todayISO(), cvLocation,
         s1Done: false, s1Date: '',
         outcome: '', outcomeDate: '', notes: '',
         fitRating: '', fitNotes: '',
+        interviewDate: '', interviewTime: '', interviewOutcome: '', interviewOutcomeDate: '',
+        noAnswerCount: 0, noAnswerLastAt: '', noAnswerActive: false,
         startDate: '', startTime: '',
         s3Done: false, s3Date: '',
         s4Done: false, s4Date: '',
@@ -1276,6 +1344,15 @@
         const p4 = document.getElementById('preview4-' + id);
         if (p3) p3.textContent = TEMPLATES['3'](item);
         if (p4) p4.textContent = TEMPLATES['4'](item);
+
+        // Covers the case where a candidate is already booked and the
+        // start date is only filled in afterward — candidate_setOutcome()
+        // already handles the "outcome set to booked WITH a start date
+        // already present" case, this handles the reverse ordering.
+        if (item.outcome === 'booked' && item.startDate &&
+            (item.role !== 'site' || item.interviewOutcome === 'passed')) {
+          sequence_scheduleOfferMessages(item);
+        }
       }
     }
 
@@ -1286,6 +1363,7 @@
       callback: 'Callback logged',
       'not-interested': 'Marked not interested',
       'not-booked': 'Marked as not booked',
+      interview: 'Interview booked',
       booked: 'Booked! 🎉'
     };
 
@@ -1296,6 +1374,20 @@
       item.outcome = value;
       item.outcomeDate = todayISO();
       candidates_save(items);
+
+      // Any outcome change is proof contact was actually made — clears
+      // whatever no-answer chase sequence was running, if any.
+      if (item.noAnswerActive) candidate_clearNoAnswer(id);
+
+      // "Got the job" sequence: fires as soon as a candidate is booked
+      // AND has a start date — for a site candidate, only once they've
+      // actually passed interview (kanban_moveCandidate enforces the same
+      // gate on drag-drop; this covers the radio-button path).
+      if (value === 'booked' && item.startDate &&
+          (item.role !== 'site' || item.interviewOutcome === 'passed')) {
+        sequence_scheduleOfferMessages(item);
+      }
+
       candidates_render();
       showToast(OUTCOME_TOAST_LABEL[value] || 'Outcome updated');
     }
@@ -1350,6 +1442,153 @@
             ${c.attendance ? `<span class="badge ${ATTENDANCE_META[c.attendance].badge}">${ATTENDANCE_META[c.attendance].label}</span>
             <button class="btn btn-ghost btn-sm" title="Clicked in error? Reset back to pending" onclick="candidate_setAttendance('${c.id}','')">↺ Reset</button>` : ''}
           </div>
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       FEATURE: INTERVIEW (site-operative pipeline only)
+       Mirrors candidate_setAttendance()'s shape: a value + auto-date-stamp
+       setter, a badge map, and an inline control gated on a prior-stage
+       condition (here, role === 'site').
+    ============================================================ */
+    const INTERVIEW_OUTCOME_META = {
+      '':        { label: 'Awaiting outcome', badge: 'badge-grey' },
+      'passed':  { label: 'Passed',   badge: 'badge-green' },
+      'failed':  { label: 'Failed',   badge: 'badge-red' },
+      'no-show': { label: 'No-show',  badge: 'badge-red' }
+    };
+
+    // Books the interview: stamps the outcome as 'interview', proves contact
+    // was made (clears any running no-answer sequence), and (re)schedules the
+    // candidate-facing interview confirmation/reminder texts. Re-callable if
+    // the recruiter edits the date/time afterward — sequence_schedule*()
+    // always cancels its own prior pending rows before inserting fresh ones,
+    // so calling this twice reschedules rather than duplicating messages.
+    function candidate_confirmInterview(id) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      if (!item.interviewDate) { alert('Enter an interview date first.'); return; }
+      item.outcome = 'interview';
+      item.outcomeDate = todayISO();
+      candidates_save(items);
+      if (item.noAnswerActive) candidate_clearNoAnswer(id);
+      sequence_scheduleInterviewMessages(item);
+      candidates_render();
+      showToast('Interview booked');
+    }
+
+    // Mirrors candidate_setAttendance() exactly. Cancels the now-moot
+    // interview reminder either way (the interview has happened), and if
+    // outcome flips away from 'passed' while already booked, also cancels
+    // the offer/start-reminder sequence — a failed/no-show interview
+    // invalidates a job that was provisionally lined up.
+    function candidate_setInterviewOutcome(id, value) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      item.interviewOutcome = value;
+      item.interviewOutcomeDate = value ? todayISO() : '';
+      candidates_save(items);
+      sequence_cancel(id, 'interview_reminder');
+      if (value !== 'passed' && item.outcome === 'booked') {
+        sequence_cancel(id, 'offer_confirmation');
+        sequence_cancel(id, 'start_reminder');
+      }
+      candidates_render();
+      renderOverview();
+      renderDetailModal();
+      vault_render();
+      showToast(value ? 'Interview outcome: ' + INTERVIEW_OUTCOME_META[value].label : 'Interview outcome reset');
+    }
+
+    // Compact interview control, site-role-only — same shape as
+    // candidate_attendanceControlHTML(). Date/time inputs always show for a
+    // site candidate so they can be entered before "Confirm interview
+    // booked" is clicked; outcome buttons only appear once an interview
+    // is actually on record (outcome === 'interview').
+    function candidate_interviewControlHTML(c) {
+      if (c.role !== 'site') return '';
+      return `
+        <li class="step" data-step="2b">
+          <div class="step-head">
+            <span class="step-num">2b</span>
+            <span class="step-title">Interview</span>
+          </div>
+          <div class="field-grid-2">
+            <div>
+              <label class="mini-label">Interview date</label>
+              <input class="mini-input" type="date" value="${c.interviewDate || ''}"
+                oninput="candidate_field('${c.id}','interviewDate',this.value)">
+            </div>
+            <div>
+              <label class="mini-label">Interview time</label>
+              <input class="mini-input" type="time" value="${c.interviewTime || ''}"
+                oninput="candidate_field('${c.id}','interviewTime',this.value)">
+            </div>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="candidate_confirmInterview('${c.id}')">Confirm interview booked</button>
+          ${c.outcome === 'interview' ? `
+          <div class="outcome-row" style="margin-top:8px;">
+            <label class="radio-label"><input type="radio" name="interviewoutcome-${c.id}" value="passed" ${c.interviewOutcome === 'passed' ? 'checked' : ''}
+              onchange="candidate_setInterviewOutcome('${c.id}','passed')"> Passed</label>
+            <label class="radio-label"><input type="radio" name="interviewoutcome-${c.id}" value="failed" ${c.interviewOutcome === 'failed' ? 'checked' : ''}
+              onchange="candidate_setInterviewOutcome('${c.id}','failed')"> Failed</label>
+            <label class="radio-label"><input type="radio" name="interviewoutcome-${c.id}" value="no-show" ${c.interviewOutcome === 'no-show' ? 'checked' : ''}
+              onchange="candidate_setInterviewOutcome('${c.id}','no-show')"> No-show</label>
+          </div>
+          ${c.interviewOutcome ? `<span class="badge ${INTERVIEW_OUTCOME_META[c.interviewOutcome].badge}">${INTERVIEW_OUTCOME_META[c.interviewOutcome].label}</span>` : ''}
+          ${c.interviewOutcome === 'passed' && c.outcome !== 'booked' ? `
+          <button class="btn btn-green btn-sm" style="margin-top:8px;" onclick="candidate_setOutcome('${c.id}','booked')">Book this candidate →</button>
+          ` : ''}
+          ` : ''}
+        </li>
+      `;
+    }
+
+    /* ============================================================
+       FEATURE: NO-ANSWER SEQUENCE
+       Logging a no-answer is deliberately its own event, distinct from any
+       outcome value — it means "attempted contact, nobody picked up," not
+       any of 'callback'/'not-interested'/etc, which all mean contact WAS
+       made. Kicks off (or restarts) an SMS chase sequence; any actual
+       outcome change clears it (see candidate_setOutcome() and
+       candidate_confirmInterview()).
+    ============================================================ */
+    function candidate_logNoAnswer(id) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      item.noAnswerCount = (item.noAnswerCount || 0) + 1;
+      item.noAnswerLastAt = new Date().toISOString();
+      item.noAnswerActive = true;
+      candidates_save(items);
+      // A repeat no-answer is a stronger signal, not stale data — cancel
+      // and reschedule fresh off this latest attempt rather than leaving
+      // an earlier sequence to run on its own timeline.
+      sequence_scheduleNoAnswerMessages(item);
+      candidates_render();
+      showToast('No answer logged (' + item.noAnswerCount + ')');
+    }
+
+    function candidate_clearNoAnswer(id) {
+      const items = candidates_get();
+      const item = items.find(i => i.id === id);
+      if (!item) return;
+      item.noAnswerActive = false;
+      candidates_save(items);
+      sequence_cancel(id, 'no_answer_followup');
+      candidates_render();
+    }
+
+    // Small button + badge cluster for the detail card's step-2 area.
+    function candidate_noAnswerControlHTML(c) {
+      return `
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px;">
+          <button class="btn btn-ghost btn-sm" onclick="candidate_logNoAnswer('${c.id}')">☎ No answer</button>
+          ${c.noAnswerCount ? `<span class="badge badge-amber">No answer ×${c.noAnswerCount}</span>` : ''}
+          ${c.noAnswerActive ? `<button class="btn btn-ghost btn-sm" onclick="candidate_clearNoAnswer('${c.id}')">Stop sequence</button>` : ''}
         </div>
       `;
     }
@@ -1465,16 +1704,19 @@
       'callback':       { label: 'Callback needed', badge: 'badge-amber', rail: 'amber' },
       'not-interested': { label: 'Not interested', badge: 'badge-red', rail: 'red' },
       'not-booked':     { label: 'Not booked', badge: 'badge-purple', rail: 'purple' },
+      'interview':      { label: 'Interview booked', badge: 'badge-amber', rail: 'amber' },
+      'interview-failed': { label: 'Interview not progressed', badge: 'badge-red', rail: 'red' },
       'booked':         { label: 'Booked', badge: 'badge-green', rail: 'green' },
       'confirmed':      { label: 'Start confirmed', badge: 'badge-green', rail: 'green' },
       'started':        { label: 'Reminder sent', badge: 'badge-green', rail: 'green' }
     };
 
-    // Maps a fine-grained category down to the four Pipeline-tab stage filters.
+    // Maps a fine-grained category down to the Pipeline-tab stage filters.
     function stageOf(cat) {
       if (cat === 'not-touched') return 'not-touched';
       if (cat === 'messaged') return 'messaged';
-      if (cat === 'callback' || cat === 'not-interested' || cat === 'not-booked') return 'called';
+      if (cat === 'callback' || cat === 'not-interested' || cat === 'not-booked' ||
+          cat === 'interview' || cat === 'interview-failed') return 'called';
       return 'booked'; // 'booked', 'confirmed', 'started'
     }
 
@@ -1484,6 +1726,15 @@
       if (c.outcome === 'callback') return 'callback';
       if (c.outcome === 'not-interested') return 'not-interested';
       if (c.outcome === 'not-booked') return 'not-booked';
+      if (c.outcome === 'interview') {
+        // Site-role-only outcome: 'interview' covers both "interview booked,
+        // awaiting outcome" and "interview happened, didn't pass" — the
+        // latter never advances to 'booked' (kanban_moveCandidate refuses
+        // that drop), so it needs its own category rather than falling
+        // through and mislabelling as still awaiting.
+        if (c.interviewOutcome === 'failed' || c.interviewOutcome === 'no-show') return 'interview-failed';
+        return 'interview';
+      }
       // outcome === 'booked' from here on
       if (c.s4Done) return 'started';
       if (c.s3Done) return 'confirmed';
@@ -1492,6 +1743,15 @@
 
     function escapeHtml(s) {
       return String(s || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
+    const ROLE_META = {
+      manufacturing: { label: 'Manufacturing', badge: 'badge-grey' },
+      site:          { label: 'Site Operative', badge: 'badge-purple' }
+    };
+    function roleBadgeHTML(c) {
+      const meta = ROLE_META[c.role] || ROLE_META.manufacturing;
+      return `<span class="badge ${meta.badge}">${meta.label}</span>`;
     }
 
     function candidateCardHTML(c) {
@@ -1504,6 +1764,7 @@
             <div class="candidate-head">
               <input class="name-input" value="${escapeHtml(c.name)}" placeholder="Candidate name"
                 oninput="candidate_field('${c.id}','name',this.value)">
+              ${roleBadgeHTML(c)}
               <span class="badge ${meta.badge}">${meta.label}</span>
               <span class="badge ${c.fitRating ? FIT_META[c.fitRating].badge : 'badge-grey'}" id="fitbadge-${c.id}" ${c.fitRating ? '' : 'hidden'}>${c.fitRating ? FIT_META[c.fitRating].label : ''}</span>
               ${c.archived ? '<span class="badge badge-grey">Archived</span>' : ''}
@@ -1573,17 +1834,21 @@
                     onchange="candidate_setOutcome('${c.id}','callback')"> Callback</label>
                   <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="not-interested" ${c.outcome === 'not-interested' ? 'checked' : ''}
                     onchange="candidate_setOutcome('${c.id}','not-interested')"> Not interested</label>
+                  ${c.role !== 'site' ? `
                   <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="not-booked" ${c.outcome === 'not-booked' ? 'checked' : ''}
                     onchange="candidate_setOutcome('${c.id}','not-booked')"> Not booked</label>
                   <label class="radio-label"><input type="radio" name="outcome-${c.id}" value="booked" ${c.outcome === 'booked' ? 'checked' : ''}
                     onchange="candidate_setOutcome('${c.id}','booked')"> Booked</label>
+                  ` : ''}
                 </div>
+                ${c.role === 'site' && !c.outcome ? `<div class="mini-label" style="margin-top:2px;">Site role — book an interview below rather than booking directly.</div>` : ''}
                 <div>
                   <label class="mini-label">Call notes</label>
                   <input class="mini-input" type="text" value="${escapeHtml(c.notes)}" placeholder="e.g. left voicemail, will call back Thurs"
                     oninput="candidate_field('${c.id}','notes',this.value)">
                 </div>
-                <div class="start-fields" ${c.outcome === 'booked' ? '' : 'hidden'}>
+                ${candidate_noAnswerControlHTML(c)}
+                <div class="start-fields" ${(c.outcome === 'booked' && (c.role !== 'site' || c.interviewOutcome === 'passed')) ? '' : 'hidden'}>
                   <div>
                     <label class="mini-label">Start date</label>
                     <input class="mini-input" type="date" value="${c.startDate || ''}"
@@ -1597,6 +1862,8 @@
                 </div>
                 ${candidate_attendanceControlHTML(c)}
               </li>
+
+              ${candidate_interviewControlHTML(c)}
 
               <li class="step" data-step="3">
                 <div class="step-head">
@@ -1624,9 +1891,39 @@
                 <div class="msg-preview" id="preview4-${c.id}">${escapeHtml(TEMPLATES['4'](c))}</div>
               </li>
             </ol>
+
+            <div class="mini-label" style="margin-top:10px;">Automated messages</div>
+            <div id="msg-audit-${c.id}" class="msg-audit">Loading…</div>
           </div>
         </div>
       `;
+    }
+
+    /* ============================================================
+       FEATURE: ROLE FILTER
+       One piece of shared state driving Pipeline/Overview/Attendance/Vault
+       all at once — see the sidebar toggle in the HTML and role_setFilter()
+       below. candidates_render() already cascades into all four tabs'
+       render functions at its tail, so a single re-render keeps every tab
+       in sync with whichever role is currently selected.
+    ============================================================ */
+    let activeRoleFilter = 'all';
+    const ROLE_FILTER_OPTIONS = [
+      { value: 'all', label: 'All' },
+      { value: 'manufacturing', label: 'Manufacturing' },
+      { value: 'site', label: 'Site Operative' }
+    ];
+    function role_renderFilterBar() {
+      const bar = document.getElementById('role-filter-bar');
+      if (!bar) return;
+      bar.innerHTML = ROLE_FILTER_OPTIONS.map(opt => `
+        <button class="btn btn-sm ${activeRoleFilter === opt.value ? 'btn-primary' : 'btn-ghost'}" onclick="role_setFilter('${opt.value}')">${opt.label}</button>
+      `).join('');
+    }
+    function role_setFilter(role) {
+      activeRoleFilter = role;
+      role_renderFilterBar();
+      candidates_render();
     }
 
     /* ============================================================
@@ -1642,12 +1939,34 @@
       { key: 'uploaded',        label: 'Uploaded CV',     color: 'var(--label)', match: c => !c.s1Done },
       { key: 'contacted',       label: 'Contact Made',    color: 'var(--amber)', match: c => !!c.s1Done && (c.outcome === '' || c.outcome === 'callback') },
       { key: 'not-interested',  label: 'Not Interested',  color: 'var(--red)',   match: c => c.outcome === 'not-interested' },
-      { key: 'interested',      label: 'Interested',      color: 'var(--accent)', match: c => c.outcome === 'not-booked' },
+      { key: 'interested',      label: 'Interested',      color: 'var(--accent)', match: c => c.outcome === 'not-booked' || c.outcome === 'interview' },
       { key: 'booked',          label: 'Booked',          color: 'var(--green)', match: c => c.outcome === 'booked' }
     ];
 
+    // Site-operative pipeline has an interview step that manufacturing
+    // doesn't — splits the manufacturing board's single "Interested"/
+    // "Booked" columns into the interview sub-states.
+    const KANBAN_COLUMNS_SITE = [
+      { key: 'uploaded',                 label: 'Uploaded CV',              color: 'var(--label)', match: c => !c.s1Done },
+      { key: 'contacted',                label: 'Contact Made',             color: 'var(--amber)', match: c => !!c.s1Done && (c.outcome === '' || c.outcome === 'callback') },
+      { key: 'not-interested',           label: 'Not Interested',           color: 'var(--red)',   match: c => c.outcome === 'not-interested' },
+      { key: 'interview-booked',         label: 'Interview Booked',         color: 'var(--accent)', match: c => c.outcome === 'interview' && !c.interviewOutcome },
+      { key: 'interview-not-progressed', label: 'Interview Not Progressed', color: 'var(--red)',   match: c => c.outcome === 'interview' && (c.interviewOutcome === 'failed' || c.interviewOutcome === 'no-show') },
+      { key: 'ready-to-book',            label: 'Ready to Book',            color: 'var(--green)', match: c => c.outcome === 'interview' && c.interviewOutcome === 'passed' },
+      { key: 'booked',                   label: 'Booked',                   color: 'var(--green)', match: c => c.outcome === 'booked' }
+    ];
+
+    // Which column set is currently on screen — driven by the shared
+    // role filter (see role_setFilter()). The "All" view can't mix two
+    // different column shapes, so it falls back to the simpler manufacturing
+    // shape (a site candidate mid-interview folds into "Interested"/"Not
+    // Interested" via KANBAN_COLUMNS' own match predicates above).
+    function activeKanbanColumns() {
+      return activeRoleFilter === 'site' ? KANBAN_COLUMNS_SITE : KANBAN_COLUMNS;
+    }
+
     function columnOf(c) {
-      for (const col of KANBAN_COLUMNS) { if (col.match(c)) return col.key; }
+      for (const col of activeKanbanColumns()) { if (col.match(c)) return col.key; }
       return 'uploaded';
     }
 
@@ -1669,11 +1988,13 @@
       switch (columnKey) {
         case 'uploaded':
           item.s1Done = false; item.s1Date = ''; item.outcome = '';
+          item.interviewOutcome = ''; item.interviewOutcomeDate = '';
           break;
         case 'contacted':
           item.s1Done = true;
           if (!item.s1Date) item.s1Date = todayISO();
           item.outcome = '';
+          item.interviewOutcome = ''; item.interviewOutcomeDate = '';
           break;
         case 'not-interested':
           if (!item.s1Done) backfillContact();
@@ -1683,7 +2004,31 @@
           if (!item.s1Done) backfillContact();
           item.outcome = 'not-booked';
           break;
+        // ---- Site-operative-only columns ----
+        case 'interview-booked':
+          if (item.role !== 'site') return;
+          if (!item.interviewDate) { alert('Open this candidate and set an interview date first.'); return; }
+          if (!item.s1Done) backfillContact();
+          item.outcome = 'interview';
+          item.interviewOutcome = ''; item.interviewOutcomeDate = '';
+          break;
+        case 'interview-not-progressed':
+          if (item.role !== 'site') return;
+          if (item.outcome !== 'interview') { alert('This candidate hasn\'t reached the interview stage yet.'); return; }
+          item.interviewOutcome = 'failed';
+          item.interviewOutcomeDate = todayISO();
+          break;
+        case 'ready-to-book':
+          if (item.role !== 'site') return;
+          if (item.outcome !== 'interview') { alert('This candidate hasn\'t reached the interview stage yet.'); return; }
+          item.interviewOutcome = 'passed';
+          item.interviewOutcomeDate = todayISO();
+          break;
         case 'booked':
+          if (item.role === 'site' && item.interviewOutcome !== 'passed') {
+            alert('A Site Operative candidate can only be booked after passing their interview.');
+            return;
+          }
           if (!item.s1Done) backfillContact();
           item.outcome = 'booked';
           break;
@@ -1696,6 +2041,13 @@
       // how long the CURRENT outcome has actually been set.
       item.outcomeDate = todayISO();
       candidates_save(items);
+      if (item.noAnswerActive) candidate_clearNoAnswer(item.id);
+
+      if (columnKey === 'interview-booked') sequence_scheduleInterviewMessages(item);
+      if (columnKey === 'interview-not-progressed') sequence_cancel(item.id, 'interview_reminder');
+      if (columnKey === 'ready-to-book') sequence_cancel(item.id, 'interview_reminder');
+      if (columnKey === 'booked' && item.startDate) sequence_scheduleOfferMessages(item);
+
       candidates_render();
     }
 
@@ -1791,6 +2143,7 @@
       const item = candidates_get().find(i => i.id === openDetailId);
       if (!item) { candidate_closeDetail(); return; }
       body.innerHTML = candidateCardHTML(item);
+      messages_render(item.id);
     }
 
     function candidates_render() {
@@ -1801,21 +2154,23 @@
       // card that was actually dropped, not on every subsequent re-render.
       const justDroppedId = kanbanJustDroppedId;
       kanbanJustDroppedId = null;
-      const all = candidates_get().filter(c => !c.archived);
+      const all = candidates_get().filter(c => !c.archived && (activeRoleFilter === 'all' || c.role === activeRoleFilter));
       const q = (document.getElementById('search-box')?.value || '').trim().toLowerCase();
       const matchesSearch = c => !q ||
         (c.name || '').toLowerCase().includes(q) ||
         (c.mobile || '').toLowerCase().includes(q) ||
         (c.email || '').toLowerCase().includes(q);
 
+      const columns = activeKanbanColumns();
+
       // Each column scrolls independently — preserve scroll position across re-render.
       const scrollPos = {};
-      KANBAN_COLUMNS.forEach(col => {
+      columns.forEach(col => {
         const el = document.getElementById('kanban-body-' + col.key);
         if (el) scrollPos[col.key] = el.scrollTop;
       });
 
-      board.innerHTML = KANBAN_COLUMNS.map(col => {
+      board.innerHTML = columns.map(col => {
         const items = all.filter(c => columnOf(c) === col.key && matchesSearch(c));
         const cardsHTML = items.length
           ? items.map(c => candidateTileHTML(c, c.id === justDroppedId)).join('')
@@ -1837,7 +2192,7 @@
         `;
       }).join('');
 
-      KANBAN_COLUMNS.forEach(col => {
+      columns.forEach(col => {
         const el = document.getElementById('kanban-body-' + col.key);
         if (el && scrollPos[col.key]) el.scrollTop = scrollPos[col.key];
       });
@@ -1867,6 +2222,7 @@
     ============================================================ */
     let cvSelectedFiles = [];
     let cvPending = [];
+    let cvBatchRole = 'manufacturing';
 
     const CV_EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w-]+/;
     const CV_MOBILE_RE = /(?:\+44\s?7\d{3}|07\d{3})[\s-]?\d{3}[\s-]?\d{3,4}/;
@@ -2160,9 +2516,9 @@
 
         if (kind === 'csv') {
           try {
-            cvPending.push(...await cv_parseCsvFile(file));
+            cvPending.push(...(await cv_parseCsvFile(file)).map(r => ({ ...r, role: cvBatchRole })));
           } catch (err) {
-            cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name,
+            cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name, role: cvBatchRole,
               error: 'Couldn’t read this CSV file — check it opens correctly elsewhere and try again.' });
           }
           continue;
@@ -2170,9 +2526,9 @@
 
         if (kind === 'excel') {
           try {
-            cvPending.push(...await cv_parseExcelFile(file));
+            cvPending.push(...(await cv_parseExcelFile(file)).map(r => ({ ...r, role: cvBatchRole })));
           } catch (err) {
-            cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name,
+            cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name, role: cvBatchRole,
               error: 'Couldn’t read this Excel file — check it opens correctly elsewhere and try again.' });
           }
           continue;
@@ -2186,15 +2542,16 @@
           const text = await cv_extractText(file);
           const cleaned = (text || '').trim();
           if (!cleaned) {
-            cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name, cvFile,
+            cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name, cvFile, role: cvBatchRole,
               error: 'Couldn’t read text from this PDF (likely a scanned image) — enter details manually.' });
           } else {
             const row = cv_parse(cleaned, file.name);
             row.cvFile = cvFile;
+            row.role = cvBatchRole;
             cvPending.push(row);
           }
         } catch (err) {
-          cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name, cvFile,
+          cvPending.push({ _uid: newId(), name: '', mobile: '', email: '', filename: file.name, cvFile, role: cvBatchRole,
             error: 'Couldn’t read this PDF — enter details manually.' });
         }
       }
@@ -2243,10 +2600,13 @@
         name: (row.name || '').trim(),
         mobile: (row.mobile || '').trim(),
         email: (row.email || '').trim(),
+        role: row.role || 'manufacturing',
         cvDate: todayISO(), cvLocation: row.filename || '',
         s1Done: false, s1Date: '',
         outcome: '', outcomeDate: '', notes: '',
         fitRating: '', fitNotes: '',
+        interviewDate: '', interviewTime: '', interviewOutcome: '', interviewOutcomeDate: '',
+        noAnswerCount: 0, noAnswerLastAt: '', noAnswerActive: false,
         startDate: '', startTime: '',
         s3Done: false, s3Date: '',
         s4Done: false, s4Date: '',
@@ -2333,6 +2693,13 @@
               <input class="mini-input" type="email" value="${escapeHtml(row.email)}" placeholder="name@example.com"
                 oninput="cv_field('${row._uid}','email',this.value)">
             </div>
+            <div>
+              <label class="mini-label">Role</label>
+              <select class="mini-input" onchange="cv_field('${row._uid}','role',this.value)">
+                <option value="manufacturing" ${row.role === 'manufacturing' ? 'selected' : ''}>Manufacturing Operative</option>
+                <option value="site" ${row.role === 'site' ? 'selected' : ''}>Site Operative</option>
+              </select>
+            </div>
           </div>
           <div class="cv-review-actions">
             <button class="btn btn-primary btn-sm" onclick="cv_addOne('${row._uid}')">Add to pipeline</button>
@@ -2351,16 +2718,19 @@
     // counting them here too would double-report them and skew the stage
     // counts with candidates no longer being worked.
     function renderOverview() {
-      const items = candidates_get().filter(c => !c.archived);
+      const items = candidates_get().filter(c => !c.archived && (activeRoleFilter === 'all' || c.role === activeRoleFilter));
       const counts = { 'not-touched': 0, messaged: 0, called: 0, booked: 0 };
+      let interviewCount = 0;
       items.forEach(c => {
         const stage = stageOf(categoryOf(c));
         counts[stage]++;
+        if (c.outcome === 'interview' && !c.interviewOutcome) interviewCount++;
       });
 
       document.getElementById('ov-nottouched').textContent = counts['not-touched'];
       document.getElementById('ov-messaged').textContent = counts.messaged;
       document.getElementById('ov-called').textContent = counts.called;
+      document.getElementById('ov-interview').textContent = interviewCount;
       document.getElementById('ov-booked').textContent = counts.booked;
 
       renderNeedsAction();
@@ -2404,7 +2774,7 @@
       const wrap = document.getElementById('needs-action-wrap');
       if (!wrap) return;
 
-      const items = candidates_get().filter(c => !c.archived);
+      const items = candidates_get().filter(c => !c.archived && (activeRoleFilter === 'all' || c.role === activeRoleFilter));
       const today = todayISO();
       const rows = [];
 
@@ -2416,6 +2786,19 @@
               id: c.id, name: c.name, urgent: true,
               reason: `Callback logged ${days} day${days === 1 ? '' : 's'} ago`
             });
+          }
+        }
+        // Interview reminder due/overdue — site-role parallel to the
+        // start-reminder check below, but off interviewDate rather than
+        // startDate, and only while an outcome is still pending.
+        if (c.outcome === 'interview' && !c.interviewOutcome && c.interviewDate) {
+          const diff = daysBetweenISO(c.interviewDate, today);
+          if (diff > 0) {
+            rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Interview outcome overdue' });
+          } else if (diff === 0) {
+            rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Interview today' });
+          } else if (diff === -1) {
+            rows.push({ id: c.id, name: c.name, urgent: false, reason: 'Interview tomorrow' });
           }
         }
         if (c.outcome === 'booked' && !c.s4Done && c.startDate) {
@@ -2498,12 +2881,14 @@
     // currently filtering the on-screen table to.
     function vault_exportCSV() {
       const all = candidates_get();
-      const header = ['Name', 'Mobile', 'Email', 'CV Uploaded Date', 'CV Location', 'Status', 'Fit Rating', 'Outcome', 'Attendance', 'Notes', 'Start Date', 'Start Time', 'Archived'];
+      const header = ['Name', 'Mobile', 'Email', 'Role', 'CV Uploaded Date', 'CV Location', 'Status', 'Fit Rating', 'Outcome', 'Interview Outcome', 'No-Answer Count', 'Attendance', 'Notes', 'Start Date', 'Start Time', 'Archived'];
       const lines = [header.map(csvEscape).join(',')];
 
       all.forEach(c => {
         const statusLabel = CATEGORY_META[categoryOf(c)]?.label || '';
         const fitLabel = c.fitRating ? (FIT_META[c.fitRating]?.label || '') : '';
+        const roleLabel = ROLE_META[c.role]?.label || '';
+        const interviewOutcomeLabel = c.interviewOutcome ? (INTERVIEW_OUTCOME_META[c.interviewOutcome]?.label || '') : '';
         // Human-readable, not the raw 'showed'/'no-show' string — and blank
         // (not "Pending") when attendance hasn't been marked at all.
         const attendanceLabel = c.attendance === 'showed' ? 'Showed' : c.attendance === 'no-show' ? 'No show' : '';
@@ -2511,11 +2896,14 @@
           c.name || '',
           c.mobile || '',
           c.email || '',
+          roleLabel,
           c.cvDate || '',
           c.cvLocation || '',
           statusLabel,
           fitLabel,
           c.outcome || '',
+          interviewOutcomeLabel,
+          c.noAnswerCount || 0,
           attendanceLabel,
           c.notes || '',
           c.startDate || '',
@@ -2543,10 +2931,12 @@
 
       const all = candidates_get();
       const q = (document.getElementById('vault-search-box')?.value || '').trim().toLowerCase();
-      const filtered = all.filter(c => !q ||
-        (c.name || '').toLowerCase().includes(q) ||
-        (c.mobile || '').toLowerCase().includes(q) ||
-        (c.email || '').toLowerCase().includes(q));
+      const filtered = all.filter(c =>
+        (activeRoleFilter === 'all' || c.role === activeRoleFilter) &&
+        (!q ||
+          (c.name || '').toLowerCase().includes(q) ||
+          (c.mobile || '').toLowerCase().includes(q) ||
+          (c.email || '').toLowerCase().includes(q)));
 
       if (!filtered.length) {
         list.innerHTML = '';
@@ -2565,6 +2955,7 @@
                 <th>Name</th>
                 <th>Mobile</th>
                 <th>Email</th>
+                <th>Role</th>
                 <th>CV uploaded</th>
                 <th>Status</th>
                 <th>Fit</th>
@@ -2580,6 +2971,7 @@
                     <td class="vault-name-cell">${escapeHtml(c.name) || '(no name)'}</td>
                     <td>${escapeHtml(c.mobile)}</td>
                     <td>${escapeHtml(c.email)}</td>
+                    <td>${roleBadgeHTML(c)}</td>
                     <td>${fmtDate(c.cvDate)}</td>
                     <td>
                       <span class="badge ${meta.badge}">${meta.label}</span>
@@ -2628,7 +3020,7 @@
       if (!needsWrap || !list || !empty) return;
 
       const today = todayISO();
-      const active = candidates_get().filter(c => !c.archived);
+      const active = candidates_get().filter(c => !c.archived && (activeRoleFilter === 'all' || c.role === activeRoleFilter));
 
       // ---- Needs checking ----
       const needsChecking = active
@@ -2714,6 +3106,240 @@
     }
 
     /* ============================================================
+       FEATURE: MESSAGE SEQUENCES (editable copy/timing) + SEND ENGINE
+
+       Sequences tab lets Harry edit the wording and timing of every
+       automated text without touching code — synced via the same
+       hub_data blob-upsert pattern as the Script tab (own key, so it
+       can never collide with candidate data or the script).
+
+       Actually SENDING lives in a separate table, `scheduled_messages`
+       (Supabase-only, no localStorage mirror — it's a queue/log, not
+       app state): sequence_schedule*() below resolves this tab's
+       current copy into concrete message_body text and INSERTs one row
+       per step, sequence_cancel() flips still-pending rows to
+       'cancelled' when a state change makes them moot, and a
+       Supabase Edge Function (deployed separately, once Twilio access
+       exists) actually sends them — see the project plan for that half.
+       Until that table exists (fresh clone, before the migration is
+       run), every insert/update below simply errors harmlessly and is
+       swallowed — the rest of the app keeps working with no sends.
+    ============================================================ */
+    const SEQUENCES_DEFAULTS = {
+      interview_confirmation: {
+        label: 'Interview booked — confirmation (sent immediately)',
+        steps: [{ offsetHours: 0, template: 'Hi {{name}}, this confirms your interview for the Site Operative role with SDS on {{interviewDateTime}}. See you then! - Mella Recruitment' }]
+      },
+      interview_reminder: {
+        label: 'Interview reminder (sent before the interview)',
+        steps: [{ offsetHours: -24, template: 'Hi {{name}}, just a reminder your interview with SDS is coming up on {{interviewDateTime}}. Let us know if you have any questions - Mella Recruitment' }]
+      },
+      no_answer_followup: {
+        label: 'No-answer chase (after a missed call)',
+        steps: [
+          { offsetHours: 0,   template: 'Hi {{name}}, sorry I missed you on the phone just now - I\'m calling about a role I think you\'d be a great fit for. Give me a call back when you get a chance? - Harry, Mella Recruitment' },
+          { offsetHours: 48,  template: 'Hi {{name}}, just following up again - still keen to have a quick chat about the role whenever suits you. - Harry, Mella Recruitment' },
+          { offsetHours: 120, template: 'Hi {{name}}, last check-in from me - if you\'re still interested in the role, give me a ring, otherwise I\'ll assume the timing isn\'t right. - Harry, Mella Recruitment' }
+        ]
+      },
+      offer_confirmation: {
+        label: 'Got the job — start confirmation (sent immediately)',
+        steps: [{ offsetHours: 0, template: 'Hi,\nAs promised, I am pleased to confirm your forthcoming start date with SDS.\n{{startDateTime}} at the below site;\n\nSDS Limited – Sustainable Drainage Systems\nUnit 4 Evercreech Way\nHighbridge\nTA9 4AR\n\nPlease ask for Craig when you arrive. Please wear warehouse appropriate clothing and you will be given PPE on site.\n\nCraig will get you inducted into the warehouse and up and running. Please say Patrick has sent you in.\n\nGood luck, I think you are going to get on well.' }]
+      },
+      start_reminder: {
+        label: 'Day-before check-in (sent before the first shift)',
+        steps: [{ offsetHours: -24, template: 'Just checking in to make sure you are all set for your first shift on {{startDateTime}}? Any questions let me know – if not wishing you all the best of luck.' }]
+      }
+    };
+
+    const SEQUENCES_KEY = 'mella_sequences';
+
+    function sequences_get() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(SEQUENCES_KEY) || 'null');
+        if (saved && typeof saved === 'object') {
+          // Merge onto the defaults rather than trusting the saved shape
+          // wholesale — a sequence type added after some browsers already
+          // had a saved copy shouldn't disappear for them (same reasoning
+          // as candidates_get()'s field-by-field normalization).
+          const merged = JSON.parse(JSON.stringify(SEQUENCES_DEFAULTS));
+          for (const key of Object.keys(merged)) {
+            if (saved[key] && Array.isArray(saved[key].steps)) merged[key].steps = saved[key].steps;
+          }
+          return merged;
+        }
+      } catch {}
+      return JSON.parse(JSON.stringify(SEQUENCES_DEFAULTS));
+    }
+
+    let sequencesSaveTimer = null;
+    function sequences_save(seqs) {
+      localStorage.setItem(SEQUENCES_KEY, JSON.stringify(seqs));
+      if (!sb) return;
+      clearTimeout(sequencesSaveTimer);
+      sequencesSaveTimer = setTimeout(() => {
+        const latest = JSON.parse(localStorage.getItem(SEQUENCES_KEY) || 'null') || seqs;
+        sb.from('hub_data')
+          .upsert({ key: SEQUENCES_KEY, value: latest, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+          .then(() => {});
+      }, 500);
+    }
+
+    function sequences_fieldChange(type, stepIdx, field, value) {
+      const seqs = sequences_get();
+      if (!seqs[type] || !seqs[type].steps[stepIdx]) return;
+      seqs[type].steps[stepIdx][field] = field === 'offsetHours' ? Number(value) || 0 : value;
+      sequences_save(seqs);
+    }
+
+    function sequences_renderEditor() {
+      const wrap = document.getElementById('sequences-editor');
+      if (!wrap) return;
+      const seqs = sequences_get();
+      wrap.innerHTML = Object.keys(seqs).map(type => {
+        const seq = seqs[type];
+        return `
+          <div class="card" style="margin-bottom:14px;">
+            <div class="card-label">${escapeHtml(seq.label)}</div>
+            ${seq.steps.map((step, i) => `
+              <div style="margin-bottom:10px;">
+                <label class="mini-label">${seq.steps.length > 1 ? 'Step ' + (i + 1) + ' — ' : ''}Timing (hours relative to the anchor date/time — negative = before, positive = after, 0 = immediately)</label>
+                <input class="mini-input" type="number" style="max-width:140px;" value="${step.offsetHours}"
+                  onchange="sequences_fieldChange('${type}', ${i}, 'offsetHours', this.value)">
+                <textarea class="script-stage-textarea" rows="3" style="margin-top:4px;"
+                  oninput="sequences_fieldChange('${type}', ${i}, 'template', this.value)">${escapeHtml(step.template)}</textarea>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }).join('') + `<button class="btn btn-ghost btn-sm" onclick="sequences_resetToDefault()">Reset all sequences to default</button>`;
+    }
+
+    function sequences_resetToDefault() {
+      if (!confirm('Reset every sequence back to its original wording and timing? Any edits will be lost.')) return;
+      localStorage.removeItem(SEQUENCES_KEY);
+      if (sb) sb.from('hub_data').delete().eq('key', SEQUENCES_KEY).then(() => {});
+      sequences_renderEditor();
+      showToast('Sequences reset to default');
+    }
+
+    // {{name}} / {{interviewDateTime}} / {{startDateTime}} substitution —
+    // reuses formatStart() so date wording matches the existing manual
+    // TEMPLATES object exactly.
+    function sequences_resolveTemplate(str, c) {
+      return String(str || '')
+        .replace(/\{\{name\}\}/g, c.name || 'there')
+        .replace(/\{\{interviewDateTime\}\}/g, formatStart(c.interviewDate, c.interviewTime))
+        .replace(/\{\{startDateTime\}\}/g, formatStart(c.startDate, c.startTime));
+    }
+
+    /* ---- Send engine: scheduled_messages table I/O ---- */
+
+    // Cancels whatever's still pending for this candidate+sequence — the
+    // single primitive every state-change trigger below calls through
+    // before inserting anything fresh, so re-triggering a sequence (edit
+    // an interview date, log a repeat no-answer) reschedules instead of
+    // duplicating messages.
+    function sequence_cancel(candidateId, sequenceType) {
+      if (!sb) return;
+      sb.from('scheduled_messages')
+        .update({ status: 'cancelled' })
+        .eq('candidate_id', candidateId).eq('sequence_type', sequenceType).eq('status', 'pending')
+        .then(({ error }) => { if (error) console.warn('sequence_cancel (scheduled_messages not set up yet?)', error.message); });
+    }
+
+    // Shared by every sequence_schedule*() below: cancels prior pending rows
+    // for the given type(s), resolves each step's template against the
+    // candidate, computes scheduled_for from the anchor date + offset, and
+    // inserts one row per step. The first (offsetHours <= 0 relative to
+    // "now") step is also fired immediately via the send-messages Edge
+    // Function rather than waiting for the next cron tick — a no-op today
+    // (network error, swallowed) until that function is deployed.
+    function sequence_schedule(item, types, anchor) {
+      if (!sb) return;
+      const to_number = phone_toE164(item.mobile);
+      if (!to_number) { showToast('⚠ ' + (item.name || 'This candidate') + '’s mobile number doesn’t look valid — sequence not scheduled.'); return; }
+
+      const seqs = sequences_get();
+      for (const type of types) sequence_cancel(item.id, type);
+
+      const rows = [];
+      for (const type of types) {
+        const seq = seqs[type];
+        if (!seq) continue;
+        seq.steps.forEach(step => {
+          rows.push({
+            candidate_id: item.id,
+            role: item.role,
+            sequence_type: type,
+            message_body: sequences_resolveTemplate(step.template, item),
+            to_number,
+            scheduled_for: new Date(anchor.getTime() + step.offsetHours * 3600000).toISOString(),
+            status: 'pending'
+          });
+        });
+      }
+      if (!rows.length) return;
+
+      sb.from('scheduled_messages').insert(rows).select('id, scheduled_for')
+        .then(({ data, error }) => {
+          if (error) { console.warn('sequence_schedule (scheduled_messages not set up yet?)', error.message); return; }
+          const now = Date.now();
+          (data || []).forEach(row => {
+            if (new Date(row.scheduled_for).getTime() <= now) {
+              sb.functions.invoke('send-messages', { body: { mode: 'immediate', id: row.id } }).catch(() => {});
+            }
+          });
+          if (openDetailId === item.id) messages_render(item.id);
+        });
+    }
+
+    function sequence_scheduleInterviewMessages(item) {
+      if (!item.interviewDate) return;
+      const anchor = new Date(item.interviewDate + 'T' + (item.interviewTime || '09:00') + ':00');
+      sequence_schedule(item, ['interview_confirmation', 'interview_reminder'], anchor);
+    }
+
+    function sequence_scheduleNoAnswerMessages(item) {
+      const anchor = item.noAnswerLastAt ? new Date(item.noAnswerLastAt) : new Date();
+      sequence_schedule(item, ['no_answer_followup'], anchor);
+    }
+
+    function sequence_scheduleOfferMessages(item) {
+      if (!item.startDate) return;
+      // Offer confirmation goes out now; start_reminder is anchored to the
+      // shift date/time (offsetHours: -24 by default), not "now".
+      sequence_schedule(item, ['offer_confirmation'], new Date());
+      sequence_schedule(item, ['start_reminder'], new Date(item.startDate + 'T' + (item.startTime || '09:00') + ':00'));
+    }
+
+    // Audit trail for the candidate detail card — last 10 scheduled_messages
+    // rows, newest first. Read-only; a no-op empty state (not an error)
+    // when the table doesn't exist yet, since Phase A of this feature ships
+    // before that migration runs.
+    async function messages_render(candidateId) {
+      const el = document.getElementById('msg-audit-' + candidateId);
+      if (!el) return;
+      if (!sb) { el.innerHTML = '<span class="mini-label">Not connected</span>'; return; }
+      const { data, error } = await sb.from('scheduled_messages')
+        .select('sequence_type, status, scheduled_for, sent_at')
+        .eq('candidate_id', candidateId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      const target = document.getElementById('msg-audit-' + candidateId); // re-check: modal may have closed while awaiting
+      if (!target) return;
+      if (error || !data || !data.length) { target.innerHTML = '<span class="mini-label">No automated messages yet</span>'; return; }
+      const STATUS_BADGE = { pending: 'badge-amber', sent: 'badge-green', failed: 'badge-red', cancelled: 'badge-grey' };
+      target.innerHTML = data.map(m => `
+        <div style="display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:4px 0; border-bottom:1px solid var(--border);">
+          <span>${escapeHtml(m.sequence_type.replace(/_/g, ' '))}</span>
+          <span class="badge ${STATUS_BADGE[m.status] || 'badge-grey'}">${escapeHtml(m.status)}</span>
+          <span class="mini-label">${fmtDate((m.sent_at || m.scheduled_for || '').slice(0, 10))}</span>
+        </div>
+      `).join('');
+    }
+
+    /* ============================================================
        SUPABASE SYNC
     ============================================================ */
     // Coarse "is the user actively typing anywhere right now" check, used to
@@ -2745,7 +3371,7 @@
       // Same reasoning as the realtime handler's guard: don't let a merge
       // triggered by page-load/tab-focus overwrite localStorage mid-edit.
       if (isEditingField()) return;
-      const keys = [CANDIDATES_KEY, SCRIPT_KEY];
+      const keys = [CANDIDATES_KEY, SCRIPT_KEY, SEQUENCES_KEY];
       const { data: rows, error } = await sb.from('hub_data').select('key, value').in('key', keys);
       if (error || !rows) { setSyncDot(false); return; }
 
@@ -2791,8 +3417,10 @@
        RENDER ALL — call this after any remote data update
     ============================================================ */
     function renderAll() {
+      role_renderFilterBar();
       candidates_render();
       script_renderStages();
+      sequences_renderEditor();
     }
 
     /* ============================================================
