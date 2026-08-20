@@ -272,6 +272,8 @@
       margin-bottom: 20px;
     }
     .form-block-title { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+    .search-bar { margin-bottom: 12px; }
+    .search-bar input { background: var(--surface); }
     .form-grid { display: grid; gap: 10px; }
     .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     label.field-label { display: block; font-size: 12px; font-weight: 600; color: var(--label); margin-bottom: 4px; }
@@ -349,6 +351,30 @@
     .task-row.done { opacity: .6; }
     .task-row.editing { align-items: flex-start; border-color: var(--accent); }
     .task-row.editing .task-row-main { min-width: 220px; }
+    .task-row[draggable="true"] { cursor: grab; }
+    .task-row.dragging { opacity: .4; }
+    .tab.drag-over { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--surface); }
+
+    /* ===================== ATTACHMENTS ===================== */
+    .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .attachment-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 4px 3px 10px;
+      font-size: 11px;
+      max-width: 100%;
+    }
+    .attachment-chip a { color: var(--text); text-decoration: none; }
+    .attachment-chip a:hover { text-decoration: underline; }
+    .attachment-size { color: var(--label); }
+    .attachment-remove {
+      border: none; background: transparent; color: var(--label); cursor: pointer;
+      font-size: 11px; line-height: 1; padding: 3px 5px; border-radius: 50%;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .attachment-remove:hover { background: var(--border); color: var(--red); }
     .task-row-main { flex: 1; min-width: 140px; }
     .task-row-title { font-size: 14px; font-weight: 700; color: var(--text); }
     .task-row-title.done { text-decoration: line-through; color: var(--label); }
@@ -420,6 +446,10 @@
 </head>
 
 <body>
+  <!-- Shared hidden file picker used by every task row's "Attach" button -->
+  <input type="file" id="global-attach-input" style="display:none" multiple
+    accept=".pdf,.doc,.docx,.xls,.xlsx,.msg,.eml" onchange="handleGlobalAttachChange(event)" />
+
   <!-- PASSCODE GATE -->
   <div id="gate-overlay" class="gate-overlay">
     <div class="gate-box">
@@ -499,6 +529,7 @@
         <button id="tab-btn-training" class="tab" onclick="showTab('training', this); todo_render('training')"><span class="nav-icon">🎓</span><span class="nav-label">Training</span></button>
         <button id="tab-btn-company" class="tab" onclick="showTab('company', this); todo_render('company')"><span class="nav-icon">🏢</span><span class="nav-label">Company</span></button>
         <button id="tab-btn-personal" class="tab" onclick="showTab('personal', this); todo_render('personal')"><span class="nav-icon">🌿</span><span class="nav-label">Personal</span></button>
+        <button id="tab-btn-clive" class="tab" onclick="showTab('clive', this); todo_render('clive')"><span class="nav-icon">👤</span><span class="nav-label">Clive</span></button>
       </nav>
     </aside>
 
@@ -513,31 +544,39 @@
             <p>Everything on your plate, across every division</p>
           </div>
 
-          <div class="stats-grid">
-            <div class="stat-box green">
-              <div class="stat-label">Total Tasks</div>
-              <div class="stat-value" id="ov-total">0</div>
+          <div class="search-bar">
+            <input type="search" id="ov-search" placeholder="Search all tasks…" oninput="renderOverview()" />
+          </div>
+
+          <div id="ov-default-view">
+            <div class="stats-grid">
+              <div class="stat-box green">
+                <div class="stat-label">Total Tasks</div>
+                <div class="stat-value" id="ov-total">0</div>
+              </div>
+              <div class="stat-box amber">
+                <div class="stat-label">Active</div>
+                <div class="stat-value" id="ov-active">0</div>
+              </div>
+              <div class="stat-box purple">
+                <div class="stat-label">Done</div>
+                <div class="stat-value" id="ov-done">0</div>
+              </div>
+              <div class="stat-box red">
+                <div class="stat-label">Overdue</div>
+                <div class="stat-value" id="ov-overdue">0</div>
+              </div>
             </div>
-            <div class="stat-box amber">
-              <div class="stat-label">Active</div>
-              <div class="stat-value" id="ov-active">0</div>
-            </div>
-            <div class="stat-box purple">
-              <div class="stat-label">Done</div>
-              <div class="stat-value" id="ov-done">0</div>
-            </div>
-            <div class="stat-box red">
-              <div class="stat-label">Overdue</div>
-              <div class="stat-value" id="ov-overdue">0</div>
+
+            <div id="ov-attention-wrap"></div>
+
+            <div class="card">
+              <div class="card-label">By Division</div>
+              <div id="ov-divisions"></div>
             </div>
           </div>
 
-          <div id="ov-attention-wrap"></div>
-
-          <div class="card">
-            <div class="card-label">By Division</div>
-            <div id="ov-divisions"></div>
-          </div>
+          <div id="ov-search-results"></div>
         </div>
 
         <!-- ===== PROPERTY DIVISION ===== -->
@@ -563,8 +602,15 @@
                   <input type="text" id="property-note" placeholder="Any details..." />
                 </div>
               </div>
+              <div>
+                <label class="field-label">Attach files (optional)</label>
+                <input type="file" id="property-file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.msg,.eml" />
+              </div>
               <button class="btn btn-primary" onclick="todo_add('property')">+ Add Task</button>
             </div>
+          </div>
+          <div class="search-bar">
+            <input type="search" id="property-search" placeholder="Search tasks…" oninput="todo_render('property')" />
           </div>
           <div id="property-list"></div>
         </div>
@@ -592,8 +638,15 @@
                   <input type="text" id="salon-note" placeholder="Any details..." />
                 </div>
               </div>
+              <div>
+                <label class="field-label">Attach files (optional)</label>
+                <input type="file" id="salon-file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.msg,.eml" />
+              </div>
               <button class="btn btn-primary" onclick="todo_add('salon')">+ Add Task</button>
             </div>
+          </div>
+          <div class="search-bar">
+            <input type="search" id="salon-search" placeholder="Search tasks…" oninput="todo_render('salon')" />
           </div>
           <div id="salon-list"></div>
         </div>
@@ -621,8 +674,15 @@
                   <input type="text" id="finance-note" placeholder="Any details..." />
                 </div>
               </div>
+              <div>
+                <label class="field-label">Attach files (optional)</label>
+                <input type="file" id="finance-file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.msg,.eml" />
+              </div>
               <button class="btn btn-primary" onclick="todo_add('finance')">+ Add Task</button>
             </div>
+          </div>
+          <div class="search-bar">
+            <input type="search" id="finance-search" placeholder="Search tasks…" oninput="todo_render('finance')" />
           </div>
           <div id="finance-list"></div>
         </div>
@@ -650,8 +710,15 @@
                   <input type="text" id="training-note" placeholder="Any details..." />
                 </div>
               </div>
+              <div>
+                <label class="field-label">Attach files (optional)</label>
+                <input type="file" id="training-file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.msg,.eml" />
+              </div>
               <button class="btn btn-primary" onclick="todo_add('training')">+ Add Task</button>
             </div>
+          </div>
+          <div class="search-bar">
+            <input type="search" id="training-search" placeholder="Search tasks…" oninput="todo_render('training')" />
           </div>
           <div id="training-list"></div>
         </div>
@@ -679,8 +746,15 @@
                   <input type="text" id="company-note" placeholder="Any details..." />
                 </div>
               </div>
+              <div>
+                <label class="field-label">Attach files (optional)</label>
+                <input type="file" id="company-file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.msg,.eml" />
+              </div>
               <button class="btn btn-primary" onclick="todo_add('company')">+ Add Task</button>
             </div>
+          </div>
+          <div class="search-bar">
+            <input type="search" id="company-search" placeholder="Search tasks…" oninput="todo_render('company')" />
           </div>
           <div id="company-list"></div>
         </div>
@@ -708,10 +782,53 @@
                   <input type="text" id="personal-note" placeholder="Any details..." />
                 </div>
               </div>
+              <div>
+                <label class="field-label">Attach files (optional)</label>
+                <input type="file" id="personal-file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.msg,.eml" />
+              </div>
               <button class="btn btn-primary" onclick="todo_add('personal')">+ Add Task</button>
             </div>
           </div>
+          <div class="search-bar">
+            <input type="search" id="personal-search" placeholder="Search tasks…" oninput="todo_render('personal')" />
+          </div>
           <div id="personal-list"></div>
+        </div>
+
+        <!-- ===== CLIVE BARRETT ===== -->
+        <div id="clive" class="section">
+          <div class="section-header">
+            <h2>Clive Barrett</h2>
+            <p>Tasks for Clive</p>
+          </div>
+          <div class="form-block">
+            <div class="form-block-title">Add a Task</div>
+            <div class="form-grid">
+              <div>
+                <label class="field-label">Task</label>
+                <input type="text" id="clive-label" placeholder="What needs doing?" />
+              </div>
+              <div class="form-row">
+                <div>
+                  <label class="field-label">Due date (optional)</label>
+                  <input type="date" id="clive-due" />
+                </div>
+                <div>
+                  <label class="field-label">Note (optional)</label>
+                  <input type="text" id="clive-note" placeholder="Any details..." />
+                </div>
+              </div>
+              <div>
+                <label class="field-label">Attach files (optional)</label>
+                <input type="file" id="clive-file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.msg,.eml" />
+              </div>
+              <button class="btn btn-primary" onclick="todo_add('clive')">+ Add Task</button>
+            </div>
+          </div>
+          <div class="search-bar">
+            <input type="search" id="clive-search" placeholder="Search tasks…" oninput="todo_render('clive')" />
+          </div>
+          <div id="clive-list"></div>
         </div>
 
       </div><!-- /main -->
@@ -734,7 +851,13 @@
       { key: 'training', label: 'Training Division' },
       { key: 'company',  label: 'Company Division' },
       { key: 'personal', label: 'Personal' },
+      { key: 'clive',    label: 'Clive Barrett' },
     ];
+
+    // Drag-and-drop to move a task between divisions is a desktop/mouse
+    // feature only — iOS/Android touch doesn't fire native HTML5 drag
+    // events reliably, so rows stay plain-tap on touch devices.
+    const IS_POINTER_FINE = window.matchMedia('(pointer: fine)').matches;
 
     /* ============================================================
        PASSCODE GATE
@@ -829,23 +952,104 @@
     }
 
     function todo_save(divKey, items) {
-      localStorage.setItem(todo_key(divKey), JSON.stringify(items));
+      // Everything (including any attachments) lives in localStorage as
+      // plain JSON — there's no separate file storage backing this app.
+      // A device's local quota (~5-10MB total, shared with every other
+      // site's data) can be exhausted by a few attached files; when it
+      // is, we still push to Supabase (unaffected by this device's local
+      // quota) but report failure so the caller can warn the user rather
+      // than silently losing the save on THIS device.
+      let localOk = true;
+      try {
+        localStorage.setItem(todo_key(divKey), JSON.stringify(items));
+      } catch (err) {
+        localOk = false;
+      }
       sb.from('hub_data')
         .upsert({ key: todo_key(divKey), value: items, updated_at: new Date().toISOString() }, { onConflict: 'key' })
-        .then(({ error }) => setSyncDot(!error));
+        .then(({ error }) => setSyncDot(!error && localOk));
+      return localOk;
     }
 
-    function todo_add(divKey) {
+    /* ============================================================
+       ATTACHMENTS — files are read as base64 data URLs and stored
+       inline on the task record (see todo_save's note above on why
+       that has a real ceiling). Kept to common office/PDF/Outlook
+       types via the file-picker's accept filter.
+    ============================================================ */
+    const ATTACH_MAX_BYTES = 4 * 1024 * 1024; // 4MB/file — keeps a handful of attachments inside a typical device's total localStorage budget
+    let attachTarget = null; // { divKey, id } set just before opening the shared hidden file picker
+
+    function fmtSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+      return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    function readFileAsAttachment(file) {
+      return new Promise(resolve => {
+        if (file.size > ATTACH_MAX_BYTES) {
+          alert(`"${file.name}" is ${fmtSize(file.size)} — over the ${fmtSize(ATTACH_MAX_BYTES)} per-file limit for this device's storage. Skipping it.`);
+          resolve(null);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve({ id: newId(), name: file.name, type: file.type, size: file.size, dataUrl: reader.result });
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function readFileListAsAttachments(fileList) {
+      const files = Array.from(fileList || []);
+      const results = await Promise.all(files.map(readFileAsAttachment));
+      return results.filter(Boolean);
+    }
+
+    function todo_attachFile(divKey, id) {
+      attachTarget = { divKey, id };
+      document.getElementById('global-attach-input').click();
+    }
+
+    async function handleGlobalAttachChange(ev) {
+      const target = attachTarget;
+      attachTarget = null;
+      if (!target) return;
+      const newAttachments = await readFileListAsAttachments(ev.target.files);
+      ev.target.value = '';
+      if (!newAttachments.length) return;
+      const items = todo_get(target.divKey).map(i =>
+        i.id === target.id ? { ...i, attachments: [...(i.attachments || []), ...newAttachments] } : i
+      );
+      const saved = todo_save(target.divKey, items);
+      if (!saved) alert("This device's local storage is full, so the attachment may not stick on this device even though it was sent to the cloud. Try removing another attachment first.");
+      todo_render(target.divKey);
+    }
+
+    function todo_removeAttachment(divKey, id, attachmentId) {
+      if (!confirm('Remove this attachment?')) return;
+      const items = todo_get(divKey).map(i =>
+        i.id === id ? { ...i, attachments: (i.attachments || []).filter(a => a.id !== attachmentId) } : i
+      );
+      todo_save(divKey, items);
+      todo_render(divKey);
+    }
+
+    async function todo_add(divKey) {
       const label = (document.getElementById(divKey + '-label')?.value || '').trim();
       const due   = document.getElementById(divKey + '-due')?.value || '';
       const note  = (document.getElementById(divKey + '-note')?.value || '').trim();
       if (!label) { alert('Please enter a task.'); return; }
+      const fileInput = document.getElementById(divKey + '-file');
+      const attachments = await readFileListAsAttachments(fileInput?.files);
       const items = todo_get(divKey);
-      items.unshift({ id: newId(), label, note, dueDate: due, status: 'active', createdAt: new Date().toISOString() });
-      todo_save(divKey, items);
+      items.unshift({ id: newId(), label, note, dueDate: due, status: 'active', createdAt: new Date().toISOString(), attachments });
+      const saved = todo_save(divKey, items);
+      if (!saved) alert("This device's local storage is full — this task was sent to the cloud but may not show here until it re-syncs. Try removing an attachment from an existing task first.");
       document.getElementById(divKey + '-label').value = '';
       document.getElementById(divKey + '-due').value   = '';
       document.getElementById(divKey + '-note').value  = '';
+      if (fileInput) fileInput.value = '';
       todo_render(divKey);
       renderOverview();
     }
@@ -861,6 +1065,57 @@
       todo_save(divKey, todo_get(divKey).filter(i => i.id !== id));
       todo_render(divKey);
       renderOverview();
+    }
+
+    /* ============================================================
+       DRAG-AND-DROP — move a task to a different division by
+       dragging its row onto a division button in the sidebar.
+       Desktop/mouse only (gated by IS_POINTER_FINE at render time).
+    ============================================================ */
+    let dragPayload = null; // { divKey, id } of the row currently being dragged
+
+    function todo_dragStart(ev, divKey, id) {
+      dragPayload = { divKey, id };
+      ev.dataTransfer.effectAllowed = 'move';
+      ev.dataTransfer.setData('text/plain', id); // Firefox won't start a drag without data set
+      ev.currentTarget.classList.add('dragging');
+    }
+
+    function todo_dragEnd(ev) {
+      ev.currentTarget.classList.remove('dragging');
+      dragPayload = null;
+    }
+
+    function todo_moveTask(fromKey, toKey, id) {
+      const fromItems = todo_get(fromKey);
+      const task = fromItems.find(i => i.id === id);
+      if (!task) return;
+      todo_save(fromKey, fromItems.filter(i => i.id !== id));
+      todo_save(toKey, [task, ...todo_get(toKey)]);
+      todo_render(fromKey);
+      todo_render(toKey);
+      renderOverview();
+    }
+
+    function initDragAndDrop() {
+      if (!IS_POINTER_FINE) return;
+      DIVISIONS.forEach(div => {
+        const btn = document.getElementById('tab-btn-' + div.key);
+        if (!btn) return;
+        btn.addEventListener('dragover', ev => {
+          if (!dragPayload || dragPayload.divKey === div.key) return;
+          ev.preventDefault();
+          btn.classList.add('drag-over');
+        });
+        btn.addEventListener('dragleave', () => btn.classList.remove('drag-over'));
+        btn.addEventListener('drop', ev => {
+          ev.preventDefault();
+          btn.classList.remove('drag-over');
+          if (!dragPayload || dragPayload.divKey === div.key) return;
+          todo_moveTask(dragPayload.divKey, div.key, dragPayload.id);
+          dragPayload = null;
+        });
+      });
     }
 
     /* ============================================================
@@ -893,14 +1148,26 @@
     function todo_render(divKey) {
       const list = document.getElementById(divKey + '-list');
       if (!list) return;
-      const items = todo_get(divKey);
+      const allItems = todo_get(divKey);
+      const query = (document.getElementById(divKey + '-search')?.value || '').trim().toLowerCase();
+      const items = query
+        ? allItems.filter(i => i.label.toLowerCase().includes(query) || (i.note || '').toLowerCase().includes(query))
+        : allItems;
+
       if (!items.length) {
-        list.innerHTML = `
-          <div class="empty">
-            <div class="empty-icon" aria-hidden="true">📋</div>
-            <div class="empty-title">Nothing on the list</div>
-            <div class="empty-sub">Add a task above to get started.</div>
-          </div>`;
+        list.innerHTML = allItems.length
+          ? `
+            <div class="empty">
+              <div class="empty-icon" aria-hidden="true">🔍</div>
+              <div class="empty-title">No matching tasks</div>
+              <div class="empty-sub">Try a different search term.</div>
+            </div>`
+          : `
+            <div class="empty">
+              <div class="empty-icon" aria-hidden="true">📋</div>
+              <div class="empty-title">Nothing on the list</div>
+              <div class="empty-sub">Add a task above to get started.</div>
+            </div>`;
         return;
       }
 
@@ -940,10 +1207,19 @@
           ? `<span class="badge ${isOverdue ? 'badge-red' : 'badge-amber'}">${isOverdue ? 'Overdue · ' : 'Due '}${fmtDate(item.dueDate)}</span>`
           : '';
         return `
-        <div class="task-row ${item.status === 'done' ? 'done' : ''}">
+        <div class="task-row ${item.status === 'done' ? 'done' : ''}"
+          ${IS_POINTER_FINE ? `draggable="true" ondragstart="todo_dragStart(event,'${divKey}','${item.id}')" ondragend="todo_dragEnd(event)" title="Drag onto a division in the sidebar to move this task"` : ''}>
           <div class="task-row-main">
             <div class="task-row-title ${item.status === 'done' ? 'done' : ''}">${item.label}</div>
             <div class="task-row-sub">${item.note ? item.note + ' · ' : ''}Added ${fmtDate(item.createdAt.slice(0, 10))}</div>
+            ${(item.attachments && item.attachments.length) ? `
+              <div class="attachments">
+                ${item.attachments.map(a => `
+                  <span class="attachment-chip">
+                    <a href="${a.dataUrl}" download="${escapeAttr(a.name)}" title="${escapeAttr(a.name)}">📎 ${escapeAttr(a.name)} <span class="attachment-size">(${fmtSize(a.size)})</span></a>
+                    <button type="button" class="attachment-remove" onclick="todo_removeAttachment('${divKey}','${item.id}','${a.id}')" title="Remove attachment">✕</button>
+                  </span>`).join('')}
+              </div>` : ''}
           </div>
           ${dueBadge}
           ${item.status === 'done' ? '<span class="badge badge-green">Done</span>' : ''}
@@ -952,6 +1228,7 @@
               ? `<button class="btn btn-green btn-sm" onclick="todo_setStatus('${divKey}','${item.id}','done')">✓ Done</button>`
               : `<button class="btn btn-ghost btn-sm" onclick="todo_setStatus('${divKey}','${item.id}','active')">↺ Reopen</button>`
             }
+            <button class="btn btn-ghost btn-sm" onclick="todo_attachFile('${divKey}','${item.id}')">📎 Attach</button>
             <button class="btn btn-ghost btn-sm" onclick="todo_startEdit('${divKey}','${item.id}')">✎ Edit</button>
             <button class="btn btn-danger btn-sm" onclick="todo_delete('${divKey}','${item.id}')">✕</button>
           </div>
@@ -963,6 +1240,45 @@
        OVERVIEW RENDER
     ============================================================ */
     function renderOverview() {
+      const query = (document.getElementById('ov-search')?.value || '').trim().toLowerCase();
+      const defaultView = document.getElementById('ov-default-view');
+      const resultsWrap = document.getElementById('ov-search-results');
+
+      if (query) {
+        defaultView.style.display = 'none';
+        const matches = [];
+        DIVISIONS.forEach(div => {
+          todo_get(div.key).forEach(i => {
+            if (i.label.toLowerCase().includes(query) || (i.note || '').toLowerCase().includes(query)) {
+              matches.push({ ...i, divKey: div.key, divLabel: div.label });
+            }
+          });
+        });
+        const today = todayISO();
+        resultsWrap.innerHTML = `
+          <div class="card">
+            <div class="card-label">Search Results (${matches.length})</div>
+            ${matches.length ? matches.map(i => {
+              const isOverdue = i.status === 'active' && i.dueDate && i.dueDate < today;
+              const dueBadge = i.dueDate
+                ? `<span class="badge ${isOverdue ? 'badge-red' : 'badge-amber'}">${isOverdue ? 'Overdue · ' : 'Due '}${fmtDate(i.dueDate)}</span>`
+                : '';
+              return `
+              <div class="needs-action-row" onclick="goToDivision('${i.divKey}')">
+                <span class="needs-action-name">${i.label} <span style="color:var(--label);font-weight:400;">— ${i.divLabel}</span></span>
+                <span style="display:flex;gap:6px;align-items:center;">
+                  ${dueBadge}
+                  ${i.status === 'done' ? '<span class="badge badge-green">Done</span>' : ''}
+                </span>
+              </div>`;
+            }).join('') : '<div class="empty"><div class="empty-icon" aria-hidden="true">🔍</div><div class="empty-title">No matching tasks</div><div class="empty-sub">Try a different search term.</div></div>'}
+          </div>`;
+        return;
+      }
+
+      defaultView.style.display = '';
+      resultsWrap.innerHTML = '';
+
       let total = 0, active = 0, done = 0, overdue = 0;
       const today = todayISO();
       const dueSoon = [];
@@ -1076,6 +1392,7 @@
       initGate();
       renderAll();
       initSync();
+      initDragAndDrop();
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) fetchRemote();
       });
