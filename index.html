@@ -465,6 +465,12 @@
       60%  { transform: scale(1.02); }
       100% { transform: scale(1); }
     }
+    .kanban-move-select {
+      font-size: 11.5px;
+      padding: 4px 6px;
+      cursor: pointer;
+      width: 100%;
+    }
     .kanban-card-name { font-family: var(--font-display); font-size: 14px; font-weight: 600; }
     .kanban-card-mobile { font-size: 12px; color: var(--label); }
     .kanban-card-note {
@@ -2097,11 +2103,25 @@
     // Compact Kanban tile — name, mobile, fit badge, one-line note preview.
     // Click anywhere on the tile opens the full detail view in a modal;
     // the tile itself is the drag handle (draggable="true" on the whole card).
+    //
+    // Drag-and-drop is native HTML5 DnD, which is NOT reliable enough to be
+    // the only way to move a candidate — it depends on the browser/OS
+    // correctly firing dragstart/dragover/drop, breaks easily on trackpads
+    // and touch devices, and fails completely silently when it doesn't
+    // register (no error, the card just doesn't move). At any real volume
+    // of leads, that's not acceptable as the sole mechanism. The "Move to"
+    // dropdown below calls the exact same kanban_moveCandidate() drag-drop
+    // already uses, so it's a 100%-reliable, click-based equivalent —
+    // drag is a convenience shortcut on top of it, not a dependency.
     function candidateTileHTML(c, justDropped) {
       const fit = c.fitRating
         ? `<span class="badge ${FIT_META[c.fitRating].badge} kanban-fit-badge">${FIT_META[c.fitRating].label}</span>`
         : '';
       const noteText = (c.notes || c.fitNotes || '').trim();
+      const currentCol = columnOf(c);
+      const moveOptions = activeKanbanColumns().map(col =>
+        `<option value="${col.key}" ${col.key === currentCol ? 'selected' : ''}>${col.label}</option>`
+      ).join('');
       return `
         <div class="kanban-card${justDropped ? ' just-dropped' : ''}" draggable="true" data-id="${c.id}"
           ondragstart="kanban_dragStart(event,'${c.id}')"
@@ -2111,6 +2131,10 @@
           ${c.mobile ? `<div class="kanban-card-mobile">${escapeHtml(c.mobile)}</div>` : ''}
           ${fit}
           ${noteText ? `<div class="kanban-card-note">${escapeHtml(noteText)}</div>` : ''}
+          <select class="mini-input kanban-move-select" onclick="event.stopPropagation()"
+            onchange="event.stopPropagation(); kanban_moveCandidate('${c.id}', this.value)">
+            ${moveOptions}
+          </select>
         </div>
       `;
     }
