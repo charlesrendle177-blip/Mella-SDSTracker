@@ -1252,8 +1252,22 @@
     const CANDIDATES_KEY = 'mella_candidates';
 
     function candidates_get() {
+      const raw = localStorage.getItem(CANDIDATES_KEY);
       try {
-        const items = JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]');
+        const parsed = JSON.parse(raw || '[]');
+        // A malformed sync payload (bad remote write, corrupted device
+        // storage, etc.) could be valid JSON but the wrong SHAPE — an
+        // object instead of an array, for instance. Don't just let that
+        // silently propagate as "no candidates"; catch it explicitly here
+        // rather than relying on the .filter()/.forEach() call sites
+        // downstream to throw and take something else down with them.
+        if (!Array.isArray(parsed)) throw new Error('stored candidates value is not an array');
+
+        // Drop anything that isn't a real object (a stray null/string/number
+        // that ended up in the array some other way) rather than letting it
+        // reach a reader and throw on `.name`/`.outcome`/etc.
+        const items = parsed.filter(c => c && typeof c === 'object');
+
         // Records saved before a field existed (e.g. attendance, added after
         // some candidates were already imported) simply don't have the key at
         // all — normalize here so every reader can safely assume it's always
@@ -1274,7 +1288,15 @@
           if (c.noAnswerActive === undefined) c.noAnswerActive = false;
         });
         return items;
-      } catch { return []; }
+      } catch (err) {
+        console.error('candidates_get: stored data unreadable, returning empty list', err);
+        // Never just silently discard data that might still be recoverable —
+        // stash whatever was there under a backup key (last one wins; this
+        // is a safety net for manual recovery, not a history log) so "the
+        // list looks empty" doesn't also mean "the data is actually gone".
+        if (raw) { try { localStorage.setItem(CANDIDATES_KEY + '_corrupted_backup', raw); } catch {} }
+        return [];
+      }
     }
 
     // The localStorage write is synchronous and immediate — it's always
@@ -1717,13 +1739,22 @@
       'started':        { label: 'Reminder sent', badge: 'badge-green', rail: 'green' }
     };
 
+    // Never a bare CATEGORY_META[categoryOf(c)] lookup anywhere in the
+    // codebase — an unrecognised/corrupted outcome value would return
+    // undefined, and reading .badge/.label off that throws, taking down
+    // whichever list is rendering at the time. Always go through this.
+    function categoryMetaOf(c) {
+      return CATEGORY_META[categoryOf(c)] || { label: 'Unknown status', badge: 'badge-grey', rail: '' };
+    }
+
     // Maps a fine-grained category down to the Pipeline-tab stage filters.
     function stageOf(cat) {
       if (cat === 'not-touched') return 'not-touched';
       if (cat === 'messaged') return 'messaged';
       if (cat === 'callback' || cat === 'not-interested' || cat === 'not-booked' ||
           cat === 'interview' || cat === 'interview-failed') return 'called';
-      return 'booked'; // 'booked', 'confirmed', 'started'
+      if (cat === 'booked' || cat === 'confirmed' || cat === 'started') return 'booked';
+      return 'called'; // 'unknown' (corrupted/unrecognised outcome) — never silently counted as booked
     }
 
     function categoryOf(c) {
@@ -1741,14 +1772,53 @@
         if (c.interviewOutcome === 'failed' || c.interviewOutcome === 'no-show') return 'interview-failed';
         return 'interview';
       }
-      // outcome === 'booked' from here on
-      if (c.s4Done) return 'started';
-      if (c.s3Done) return 'confirmed';
-      return 'booked';
+      if (c.outcome === 'booked') {
+        if (c.s4Done) return 'started';
+        if (c.s3Done) return 'confirmed';
+        return 'booked';
+      }
+      // Anything else is an outcome value this app doesn't recognise —
+      // corrupted data, a manual edit, a future value from a version this
+      // one predates. Falling through to 'booked' here (the old behaviour)
+      // would silently mislabel a broken record as a hired candidate,
+      // which is worse than just flagging it as unknown.
+      return 'unknown';
     }
 
     function escapeHtml(s) {
       return String(s || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
+    // Runs fn() but never lets it throw past this point. Used to chain
+    // independent top-level render/init calls (e.g. candidates_render()'s
+    // tail calling renderOverview()/vault_render()/attendance_render() one
+    // after another) so a failure in ONE never stops the ones after it —
+    // without this, a single JS error partway through would silently leave
+    // every later tab un-refreshed, which looks exactly like "the whole
+    // dashboard is broken" even though only one small part actually failed.
+    function safeCall(label, fn) {
+      try { fn(); } catch (err) { console.error(label + ' failed', err); }
+    }
+
+    // Renders one candidate's HTML via renderFn, but never lets a single
+    // malformed/unexpected record crash the WHOLE list it's part of.
+    // Every place that maps an array of candidates to HTML (kanban tiles,
+    // Vault rows, Attendance cards, Overview's recent list) goes through
+    // this — without it, one bad record throwing mid-.map() aborts the
+    // entire render function, which (since candidates_render() calls
+    // renderOverview()/vault_render()/attendance_render() in sequence at
+    // its own tail) can silently stop the WHOLE dashboard updating, not
+    // just the one broken card. Logs to console for debugging and shows a
+    // small visible error card instead of a silent gap.
+    function safeCandidateHTML(c, renderFn) {
+      try {
+        return renderFn(c);
+      } catch (err) {
+        console.error('Failed to render candidate', c && c.id, err);
+        return `<div class="card" style="padding:10px 12px; border:1.5px solid var(--red); font-size:12px; color:var(--red);">
+          ⚠ Couldn't display "${escapeHtml((c && c.name) || 'this candidate')}" — open Vault to check/fix its data.
+        </div>`;
+      }
     }
 
     const ROLE_META = {
@@ -1761,8 +1831,7 @@
     }
 
     function candidateCardHTML(c) {
-      const cat = categoryOf(c);
-      const meta = CATEGORY_META[cat];
+      const meta = categoryMetaOf(c);
       return `
         <div class="card candidate" data-outcome="${c.outcome}">
           <div class="candidate-rail ${meta.rail}"></div>
@@ -2173,58 +2242,68 @@
     function candidates_render() {
       const board = document.getElementById('kanban-board');
       if (!board) return;
-      // Presentational only — see kanbanJustDroppedId's declaration.
-      // Consumed once per render so the "snap" plays exactly once, on the
-      // card that was actually dropped, not on every subsequent re-render.
-      const justDroppedId = kanbanJustDroppedId;
-      kanbanJustDroppedId = null;
-      const all = candidates_get().filter(c => !c.archived && (activeRoleFilter === 'all' || c.role === activeRoleFilter));
-      const q = (document.getElementById('search-box')?.value || '').trim().toLowerCase();
-      const matchesSearch = c => !q ||
-        (c.name || '').toLowerCase().includes(q) ||
-        (c.mobile || '').toLowerCase().includes(q) ||
-        (c.email || '').toLowerCase().includes(q);
+      // The board-build runs in `try`; the sibling tab renders run in
+      // `finally` — so even if something unexpected throws while building
+      // the Kanban board itself (beyond what safeCandidateHTML already
+      // isolates per-card), Overview/Vault/Attendance/the detail modal
+      // still refresh instead of silently freezing along with it.
+      try {
+        // Presentational only — see kanbanJustDroppedId's declaration.
+        // Consumed once per render so the "snap" plays exactly once, on the
+        // card that was actually dropped, not on every subsequent re-render.
+        const justDroppedId = kanbanJustDroppedId;
+        kanbanJustDroppedId = null;
+        const all = candidates_get().filter(c => !c.archived && (activeRoleFilter === 'all' || c.role === activeRoleFilter));
+        const q = (document.getElementById('search-box')?.value || '').trim().toLowerCase();
+        const matchesSearch = c => !q ||
+          (c.name || '').toLowerCase().includes(q) ||
+          (c.mobile || '').toLowerCase().includes(q) ||
+          (c.email || '').toLowerCase().includes(q);
 
-      const columns = activeKanbanColumns();
+        const columns = activeKanbanColumns();
 
-      // Each column scrolls independently — preserve scroll position across re-render.
-      const scrollPos = {};
-      columns.forEach(col => {
-        const el = document.getElementById('kanban-body-' + col.key);
-        if (el) scrollPos[col.key] = el.scrollTop;
-      });
+        // Each column scrolls independently — preserve scroll position across re-render.
+        const scrollPos = {};
+        columns.forEach(col => {
+          const el = document.getElementById('kanban-body-' + col.key);
+          if (el) scrollPos[col.key] = el.scrollTop;
+        });
 
-      board.innerHTML = columns.map(col => {
-        const items = all.filter(c => columnOf(c) === col.key && matchesSearch(c));
-        const cardsHTML = items.length
-          ? items.map(c => candidateTileHTML(c, c.id === justDroppedId)).join('')
-          : `<div class="kanban-empty"><span class="kanban-empty-icon">📭</span><span>No candidates</span></div>`;
-        return `
-          <div class="kanban-column" style="--col-color:${col.color}">
-            <div class="kanban-column-topbar"></div>
-            <div class="kanban-column-header">
-              <span class="kanban-column-label">${col.label}</span>
-              <span class="kanban-count-badge">${items.length}</span>
+        board.innerHTML = columns.map(col => {
+          const items = all.filter(c => columnOf(c) === col.key && matchesSearch(c));
+          const cardsHTML = items.length
+            ? items.map(c => safeCandidateHTML(c, cc => candidateTileHTML(cc, cc.id === justDroppedId))).join('')
+            : `<div class="kanban-empty"><span class="kanban-empty-icon">📭</span><span>No candidates</span></div>`;
+          return `
+            <div class="kanban-column" style="--col-color:${col.color}">
+              <div class="kanban-column-topbar"></div>
+              <div class="kanban-column-header">
+                <span class="kanban-column-label">${col.label}</span>
+                <span class="kanban-count-badge">${items.length}</span>
+              </div>
+              <div class="kanban-column-body" id="kanban-body-${col.key}"
+                ondragover="kanban_dragOver(event)"
+                ondragleave="kanban_dragLeave(event)"
+                ondrop="kanban_drop(event,'${col.key}')">
+                ${cardsHTML}
+              </div>
             </div>
-            <div class="kanban-column-body" id="kanban-body-${col.key}"
-              ondragover="kanban_dragOver(event)"
-              ondragleave="kanban_dragLeave(event)"
-              ondrop="kanban_drop(event,'${col.key}')">
-              ${cardsHTML}
-            </div>
-          </div>
-        `;
-      }).join('');
+          `;
+        }).join('');
 
-      columns.forEach(col => {
-        const el = document.getElementById('kanban-body-' + col.key);
-        if (el && scrollPos[col.key]) el.scrollTop = scrollPos[col.key];
-      });
-
-      renderDetailModal();
-      renderOverview();
-      vault_render();
-      attendance_render();
+        columns.forEach(col => {
+          const el = document.getElementById('kanban-body-' + col.key);
+          if (el && scrollPos[col.key]) el.scrollTop = scrollPos[col.key];
+        });
+      } catch (err) {
+        console.error('candidates_render board build failed', err);
+        board.innerHTML = `<div class="empty" style="grid-column:1/-1;">⚠ The pipeline board hit an error and couldn't fully render — other tabs are unaffected. Check the browser console, or open Vault to find the record causing it.</div>`;
+      } finally {
+        safeCall('renderDetailModal', renderDetailModal);
+        safeCall('renderOverview', renderOverview);
+        safeCall('vault_render', vault_render);
+        safeCall('attendance_render', attendance_render);
+      }
     }
 
     /* ============================================================
@@ -2715,7 +2794,7 @@
 
       list.innerHTML = cvPending.map(row => {
         const dup = cv_findDuplicate(row);
-        const dupMeta = dup ? CATEGORY_META[categoryOf(dup)] : null;
+        const dupMeta = dup ? categoryMetaOf(dup) : null;
         return `
         <div class="card">
           <div class="cv-review-filename">📄 ${escapeHtml(row.filename)}</div>
@@ -2777,22 +2856,22 @@
       document.getElementById('ov-interview').textContent = interviewCount;
       document.getElementById('ov-booked').textContent = counts.booked;
 
-      renderNeedsAction();
-      renderConversionStat();
+      safeCall('renderNeedsAction', renderNeedsAction);
+      safeCall('renderConversionStat', renderConversionStat);
 
       const recent = document.getElementById('ov-recent');
       if (!recent) return;
       if (!items.length) { recent.innerHTML = '<div class="empty">No candidates yet</div>'; return; }
       const sorted = [...items].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-      recent.innerHTML = sorted.slice(0, 5).map(c => {
-        const meta = CATEGORY_META[categoryOf(c)];
+      recent.innerHTML = sorted.slice(0, 5).map(c => safeCandidateHTML(c, cc => {
+        const meta = categoryMetaOf(cc);
         return `
           <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
-            <span style="font-size:13px;font-weight:600;">${escapeHtml(c.name) || '(no name)'}</span>
+            <span style="font-size:13px;font-weight:600;">${escapeHtml(cc.name) || '(no name)'}</span>
             <span class="badge ${meta.badge}">${meta.label}</span>
           </div>
         `;
-      }).join('');
+      })).join('');
     }
 
     /* ============================================================
@@ -2929,7 +3008,7 @@
       const lines = [header.map(csvEscape).join(',')];
 
       all.forEach(c => {
-        const statusLabel = CATEGORY_META[categoryOf(c)]?.label || '';
+        const statusLabel = categoryMetaOf(c)?.label || '';
         const fitLabel = c.fitRating ? (FIT_META[c.fitRating]?.label || '') : '';
         const roleLabel = ROLE_META[c.role]?.label || '';
         const interviewOutcomeLabel = c.interviewOutcome ? (INTERVIEW_OUTCOME_META[c.interviewOutcome]?.label || '') : '';
@@ -3007,34 +3086,34 @@
               </tr>
             </thead>
             <tbody>
-              ${sorted.map(c => {
-                const meta = CATEGORY_META[categoryOf(c)];
-                const fit = c.fitRating ? `<span class="badge ${FIT_META[c.fitRating].badge}">${FIT_META[c.fitRating].label}</span>` : '';
+              ${sorted.map(c => safeCandidateHTML(c, cc => {
+                const meta = categoryMetaOf(cc);
+                const fit = cc.fitRating ? `<span class="badge ${FIT_META[cc.fitRating].badge}">${FIT_META[cc.fitRating].label}</span>` : '';
                 return `
-                  <tr class="vault-row" onclick="candidate_openDetail('${c.id}')">
-                    <td class="vault-name-cell">${escapeHtml(c.name) || '(no name)'}</td>
-                    <td>${escapeHtml(c.mobile)}</td>
-                    <td>${escapeHtml(c.email)}</td>
-                    <td>${roleBadgeHTML(c)}</td>
-                    <td>${fmtDate(c.cvDate)}</td>
+                  <tr class="vault-row" onclick="candidate_openDetail('${cc.id}')">
+                    <td class="vault-name-cell">${escapeHtml(cc.name) || '(no name)'}</td>
+                    <td>${escapeHtml(cc.mobile)}</td>
+                    <td>${escapeHtml(cc.email)}</td>
+                    <td>${roleBadgeHTML(cc)}</td>
+                    <td>${fmtDate(cc.cvDate)}</td>
                     <td>
                       <span class="badge ${meta.badge}">${meta.label}</span>
-                      ${c.archived ? '<span class="badge badge-grey">Archived</span>' : ''}
-                      ${(c.outcome === 'booked' && c.attendance) ? `<span class="badge ${ATTENDANCE_META[c.attendance].badge}">${ATTENDANCE_META[c.attendance].label}</span>` : ''}
+                      ${cc.archived ? '<span class="badge badge-grey">Archived</span>' : ''}
+                      ${(cc.outcome === 'booked' && cc.attendance && ATTENDANCE_META[cc.attendance]) ? `<span class="badge ${ATTENDANCE_META[cc.attendance].badge}">${ATTENDANCE_META[cc.attendance].label}</span>` : ''}
                     </td>
                     <td>${fit}</td>
                     <td>
                       <div class="vault-row-actions">
-                        ${c.cvFile ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); cv_viewFile('${c.id}')">📄 View CV</button>` : ''}
-                        ${c.archived
-                          ? `<button class="btn btn-green btn-sm" onclick="event.stopPropagation(); candidate_restore('${c.id}')">Restore to pipeline</button>`
+                        ${cc.cvFile ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); cv_viewFile('${cc.id}')">📄 View CV</button>` : ''}
+                        ${cc.archived
+                          ? `<button class="btn btn-green btn-sm" onclick="event.stopPropagation(); candidate_restore('${cc.id}')">Restore to pipeline</button>`
                           : ''}
-                        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); candidate_deletePermanently('${c.id}')">Delete permanently</button>
+                        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); candidate_deletePermanently('${cc.id}')">Delete permanently</button>
                       </div>
                     </td>
                   </tr>
                 `;
-              }).join('')}
+              })).join('')}
             </tbody>
           </table>
         </div>
@@ -3107,7 +3186,7 @@
       // Soonest start first; candidates with no start date set yet sort last.
       const sorted = [...starters].sort((a, b) => (a.startDate || '9999-99-99').localeCompare(b.startDate || '9999-99-99'));
 
-      list.innerHTML = `<div class="starters-grid">${sorted.map(c => starterCardHTML(c)).join('')}</div>`;
+      list.innerHTML = `<div class="starters-grid">${sorted.map(c => safeCandidateHTML(c, starterCardHTML)).join('')}</div>`;
     }
 
     // A blatant, glanceable "how many days until their first shift" figure —
@@ -3461,10 +3540,14 @@
        RENDER ALL — call this after any remote data update
     ============================================================ */
     function renderAll() {
-      role_renderFilterBar();
-      candidates_render();
-      script_renderStages();
-      sequences_renderEditor();
+      // Each independent — one failing must not stop the others, or skip
+      // initSync() being reached by whoever called renderAll() (see
+      // DOMContentLoaded below, where this matters most: a broken initial
+      // render must never prevent Supabase sync from starting).
+      safeCall('role_renderFilterBar', role_renderFilterBar);
+      safeCall('candidates_render', candidates_render);
+      safeCall('script_renderStages', script_renderStages);
+      safeCall('sequences_renderEditor', sequences_renderEditor);
     }
 
     /* ============================================================
@@ -3577,29 +3660,53 @@
 
       if (!matches.length) { results.innerHTML = '<div class="empty" style="padding:14px;">No matches</div>'; return; }
 
-      results.innerHTML = matches.map(c => {
-        const meta = CATEGORY_META[categoryOf(c)];
+      results.innerHTML = matches.map(c => safeCandidateHTML(c, cc => {
+        const meta = categoryMetaOf(cc);
         return `
-          <div class="script-search-row" onclick="candidate_openDetail('${c.id}')">
+          <div class="script-search-row" onclick="candidate_openDetail('${cc.id}')">
             <div>
-              <div class="script-search-name">${escapeHtml(c.name) || '(no name)'}</div>
-              <div class="script-search-mobile">${escapeHtml(c.mobile)}</div>
+              <div class="script-search-name">${escapeHtml(cc.name) || '(no name)'}</div>
+              <div class="script-search-mobile">${escapeHtml(cc.mobile)}</div>
             </div>
             <span class="badge ${meta.badge}">${meta.label}</span>
           </div>
         `;
-      }).join('');
+      })).join('');
     }
+
+    /* ============================================================
+       GLOBAL ERROR SAFETY NET
+       Every render/init call site above already catches its own errors
+       (safeCall/safeCandidateHTML) — this is the backstop for whatever
+       still isn't covered: a stray event-handler exception, a rejected
+       promise nobody awaited, anything unanticipated. Without this, a bug
+       fails completely silently — the page just stops responding to
+       something with zero visible sign anything went wrong. Throttled so
+       a repeating error can't spam the user with toasts.
+    ============================================================ */
+    let lastErrorToastAt = 0;
+    function reportUnexpectedError(err) {
+      console.error('Unhandled error', err);
+      const now = Date.now();
+      if (now - lastErrorToastAt < 8000) return;
+      lastErrorToastAt = now;
+      showToast('⚠ Something went wrong — your data is safe, but try refreshing if things look off.');
+    }
+    window.addEventListener('error', e => reportUnexpectedError(e.error || e.message));
+    window.addEventListener('unhandledrejection', e => reportUnexpectedError(e.reason));
 
     /* ============================================================
        INIT
     ============================================================ */
     document.addEventListener('DOMContentLoaded', () => {
-      renderAll();
-      script_renderStages();
-      initSync();
+      // Each wrapped independently: a broken initial render must never be
+      // able to prevent initSync() from running — losing sync entirely
+      // because of one rendering bug would be far worse than the bug itself.
+      safeCall('renderAll (initial)', renderAll);
+      safeCall('script_renderStages (initial)', script_renderStages);
+      safeCall('initSync', initSync);
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && sb) fetchRemote();
+        if (!document.hidden && sb) safeCall('fetchRemote', fetchRemote);
       });
     });
 
