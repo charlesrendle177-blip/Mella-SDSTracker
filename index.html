@@ -1312,17 +1312,32 @@
     // freshest localStorage at fire time (not a closed-over `items` from
     // whichever call started the timer) so the request that actually goes
     // out reflects everything typed up to that point.
+    // BUG FIX: a debounced write is only safe if something guarantees it
+    // still fires when the page is about to disappear. On a phone, moving a
+    // Kanban card and then switching apps (to actually make the call) or
+    // letting the screen lock happens well inside this 500ms window — iOS
+    // Safari can suspend or fully discard a backgrounded tab's JS timers,
+    // so the pending upsert never goes out. localStorage already has the
+    // change, but Supabase doesn't — and the NEXT fetchRemote() (e.g. on
+    // reopening the tab) pulls the old server value back down over it,
+    // which looks exactly like "the drag didn't work." candidates_flushSave()
+    // is called immediately (bypassing the timer) from the visibilitychange/
+    // pagehide handlers below whenever the page is about to go away.
     let candidatesSaveTimer = null;
+    function candidates_flushSave() {
+      clearTimeout(candidatesSaveTimer);
+      candidatesSaveTimer = null;
+      if (!sb) return;
+      const latest = JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]');
+      sb.from('hub_data')
+        .upsert({ key: CANDIDATES_KEY, value: latest, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+        .then(() => {});
+    }
     function candidates_save(items) {
       localStorage.setItem(CANDIDATES_KEY, JSON.stringify(items));
       if (!sb) return;
       clearTimeout(candidatesSaveTimer);
-      candidatesSaveTimer = setTimeout(() => {
-        const latest = JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]');
-        sb.from('hub_data')
-          .upsert({ key: CANDIDATES_KEY, value: latest, updated_at: new Date().toISOString() }, { onConflict: 'key' })
-          .then(() => {});
-      }, 500);
+      candidatesSaveTimer = setTimeout(candidates_flushSave, 500);
     }
 
     function candidates_add() {
@@ -3587,17 +3602,23 @@
 
     // Same debounce reasoning as candidates_save() — script_fieldChange()
     // fires this on every keystroke while editing a script stage.
+    // Same flush-on-hide reasoning as candidates_flushSave() above.
     let scriptSaveTimer = null;
+    function script_flushSave() {
+      clearTimeout(scriptSaveTimer);
+      scriptSaveTimer = null;
+      if (!sb) return;
+      const latest = JSON.parse(localStorage.getItem(SCRIPT_KEY) || 'null');
+      if (!latest) return;
+      sb.from('hub_data')
+        .upsert({ key: SCRIPT_KEY, value: latest, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+        .then(() => {});
+    }
     function script_save(stages) {
       localStorage.setItem(SCRIPT_KEY, JSON.stringify(stages));
       if (!sb) return;
       clearTimeout(scriptSaveTimer);
-      scriptSaveTimer = setTimeout(() => {
-        const latest = JSON.parse(localStorage.getItem(SCRIPT_KEY) || 'null') || stages;
-        sb.from('hub_data')
-          .upsert({ key: SCRIPT_KEY, value: latest, updated_at: new Date().toISOString() }, { onConflict: 'key' })
-          .then(() => {});
-      }, 500);
+      scriptSaveTimer = setTimeout(script_flushSave, 500);
     }
 
     // Persists one field without a full re-render, same "don't lose focus
@@ -3706,7 +3727,25 @@
       safeCall('script_renderStages (initial)', script_renderStages);
       safeCall('initSync', initSync);
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && sb) safeCall('fetchRemote', fetchRemote);
+        if (document.hidden) {
+          // Page is being backgrounded (app switch, screen lock, tab
+          // switch) — flush any pending debounced write NOW rather than
+          // trusting the timer to survive. See candidates_flushSave()'s
+          // comment for why this matters, especially on mobile.
+          safeCall('candidates_flushSave', candidates_flushSave);
+          safeCall('script_flushSave', script_flushSave);
+        } else if (sb) {
+          safeCall('fetchRemote', fetchRemote);
+        }
+      });
+      // Belt-and-braces alongside visibilitychange: pagehide is the
+      // recommended event for "the page may never run again" on mobile
+      // Safari specifically (unlike beforeunload, it doesn't block the
+      // back/forward cache, and it reliably fires on app-switch/tab-close
+      // where visibilitychange's timing can vary by browser).
+      window.addEventListener('pagehide', () => {
+        safeCall('candidates_flushSave', candidates_flushSave);
+        safeCall('script_flushSave', script_flushSave);
       });
     });
 
