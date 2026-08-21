@@ -177,6 +177,48 @@
       from { opacity: 0; transform: translateY(6px); }
       to   { opacity: 1; transform: translateY(0); }
     }
+    .role-filter-banner {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 10px 16px;
+      margin-bottom: 22px;
+      border-radius: 12px;
+      border: 1.5px solid var(--border);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .role-filter-banner-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--label);
+      margin-right: 2px;
+    }
+    .role-filter-btn {
+      padding: 8px 18px;
+      border-radius: 20px;
+      border: 1.5px solid var(--border);
+      background: var(--surface-2);
+      font-family: var(--font);
+      font-weight: 700;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      transition: transform .12s var(--ease-out), box-shadow .12s var(--ease-out);
+    }
+    .role-filter-btn:hover { transform: translateY(-1px); }
+    .role-filter-btn.active {
+      border-color: transparent;
+      color: #171310;
+      box-shadow: var(--shadow-hover);
+    }
+    .role-filter-btn.active[data-role="all"] { background: var(--accent); }
+    .role-filter-btn.active[data-role="manufacturing"] { background: #b9c2cc; }
+    .role-filter-btn.active[data-role="site"] { background: #8fd6a8; }
+
     .section-header { margin-bottom: 20px; }
     .section-header h2 { font-family: var(--font-display); font-size: 23px; font-weight: 600; margin-bottom: 5px; letter-spacing: -.01em; }
     .section-header p { font-size: 13px; color: var(--label); }
@@ -817,17 +859,18 @@
         <button class="tab" onclick="showTab('sequences', this)"><span class="nav-icon">✉</span> Sequences</button>
       </nav>
 
-      <div class="sidebar-footer" style="flex-direction:column; align-items:stretch; gap:8px;">
-        <div style="display:flex; gap:6px;">
-          <span id="sync-dot" class="sync-dot" title="Sync status"></span>
-          <span>SDS Limited</span>
-        </div>
-        <div id="role-filter-bar" style="display:flex; gap:4px; flex-wrap:wrap;"></div>
+      <div class="sidebar-footer">
+        <span id="sync-dot" class="sync-dot" title="Sync status"></span>
+        <span>SDS Limited</span>
       </div>
     </aside>
 
     <!-- SECTIONS -->
     <div class="content"><div class="main">
+
+      <!-- Always visible above every tab — which role's candidates you're
+           currently looking at, unmissable regardless of scroll or tab. -->
+      <div id="role-filter-banner" class="role-filter-banner"></div>
 
       <!-- ===== OVERVIEW ===== -->
       <div id="overview" class="section active">
@@ -2004,11 +2047,15 @@
       { value: 'site', label: 'Site Operative' }
     ];
     function role_renderFilterBar() {
-      const bar = document.getElementById('role-filter-bar');
+      const bar = document.getElementById('role-filter-banner');
       if (!bar) return;
-      bar.innerHTML = ROLE_FILTER_OPTIONS.map(opt => `
-        <button class="btn btn-sm ${activeRoleFilter === opt.value ? 'btn-primary' : 'btn-ghost'}" onclick="role_setFilter('${opt.value}')">${opt.label}</button>
-      `).join('');
+      const active = candidates_get().filter(c => !c.archived);
+      const countFor = value => value === 'all' ? active.length : active.filter(c => c.role === value).length;
+      bar.innerHTML = `<span class="role-filter-banner-label">Viewing</span>` +
+        ROLE_FILTER_OPTIONS.map(opt => `
+          <button class="role-filter-btn ${activeRoleFilter === opt.value ? 'active' : ''}" data-role="${opt.value}"
+            onclick="role_setFilter('${opt.value}')">${opt.label} (${countFor(opt.value)})</button>
+        `).join('');
     }
     function role_setFilter(role) {
       activeRoleFilter = role;
