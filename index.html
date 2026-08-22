@@ -177,6 +177,32 @@
       from { opacity: 0; transform: translateY(6px); }
       to   { opacity: 1; transform: translateY(0); }
     }
+    .auth-gate {
+      position: fixed; inset: 0; z-index: 1000;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg);
+      padding: 20px;
+    }
+    .auth-card {
+      width: 100%; max-width: 360px;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-hover);
+      padding: 32px 28px;
+      text-align: center;
+    }
+    .auth-card form { text-align: left; }
+    .auth-error {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(201,80,59,.1);
+      color: var(--red);
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+
     .role-filter-banner {
       display: flex;
       align-items: center;
@@ -834,7 +860,41 @@
 </head>
 
 <body>
-  <div class="shell">
+
+  <!-- ===== AUTH GATE =====
+       Visible by default (no JS needed to hide the dashboard behind it —
+       nothing should ever flash visible pre-auth-check). JS decides
+       whether to hide this and reveal .shell, or leave it up. Two forms
+       inside: #auth-signin for a normal email+password login, and
+       #auth-setpw for the one-time "you were invited, pick a password"
+       step Supabase's invite-link flow needs — see auth_init() below for
+       which one shows. -->
+  <div id="auth-gate" class="auth-gate">
+    <div class="auth-card">
+      <div class="header-mark" aria-hidden="true" style="margin:0 auto 14px;">M</div>
+      <h2 style="text-align:center; margin-bottom:4px;">Candidate Pipeline</h2>
+      <p style="text-align:center; color:var(--label); font-size:13px; margin-bottom:22px;">Mella Recruitment → SDS Limited</p>
+
+      <form id="auth-signin" onsubmit="event.preventDefault(); auth_signIn();">
+        <label class="field-label">Email</label>
+        <input type="email" id="auth-email" placeholder="you@example.com" autocomplete="username" required />
+        <label class="field-label" style="margin-top:10px;">Password</label>
+        <input type="password" id="auth-password" placeholder="••••••••" autocomplete="current-password" required />
+        <div id="auth-error" class="auth-error" hidden></div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Sign in</button>
+      </form>
+
+      <form id="auth-setpw" onsubmit="event.preventDefault(); auth_setPassword();" hidden>
+        <p style="font-size:13px; color:var(--label); margin-bottom:14px;">You've been invited — set a password to finish setting up your account.</p>
+        <label class="field-label">New password</label>
+        <input type="password" id="auth-newpassword" placeholder="At least 8 characters" autocomplete="new-password" minlength="8" required />
+        <div id="auth-setpw-error" class="auth-error" hidden></div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Set password &amp; continue</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="shell" id="app-shell" hidden>
 
     <!-- SIDEBAR -->
     <aside class="sidebar">
@@ -861,7 +921,8 @@
 
       <div class="sidebar-footer">
         <span id="sync-dot" class="sync-dot" title="Sync status"></span>
-        <span>SDS Limited</span>
+        <span id="auth-user-email">SDS Limited</span>
+        <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="auth_signOut()">Sign out</button>
       </div>
     </aside>
 
@@ -1131,6 +1192,121 @@
     const sb = (SUPABASE_URL !== 'YOUR_SUPABASE_URL')
       ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
       : null;
+
+    /* ============================================================
+       AUTH GATE
+       Restricts the dashboard to logged-in users only — real candidate
+       PII lives behind this now, not just the public anon key. The
+       database side (RLS policies requiring an authenticated,
+       allow-listed email) is what actually enforces this; this module is
+       the UI half — deciding whether #auth-gate or #app-shell is visible,
+       and handling sign-in/out and the one-time "invited user sets their
+       first password" step.
+
+       Supabase's invite-link flow lands back on this page with
+       #access_token=...&type=invite (or type=recovery for a password
+       reset) in the URL fragment. supabase-js auto-detects that on load
+       (detectSessionInUrl defaults to true) and establishes a real
+       session from it — but an invited user hasn't set a password yet,
+       so they can't sign in with signInWithPassword() next time until
+       they do. auth_init() checks for that hash BEFORE deciding which
+       form to show, so an invite lands on "set a password", not
+       straight into the dashboard.
+    ============================================================ */
+    function auth_showGate() {
+      document.getElementById('auth-gate').hidden = false;
+      document.getElementById('app-shell').hidden = true;
+    }
+
+    function auth_showApp(session) {
+      document.getElementById('auth-gate').hidden = true;
+      document.getElementById('app-shell').hidden = false;
+      const emailEl = document.getElementById('auth-user-email');
+      if (emailEl) emailEl.textContent = (session && session.user && session.user.email) || 'SDS Limited';
+      renderAll();
+      initSync();
+    }
+
+    function auth_signIn() {
+      if (!sb) return;
+      const email = document.getElementById('auth-email').value.trim();
+      const password = document.getElementById('auth-password').value;
+      const errEl = document.getElementById('auth-error');
+      errEl.hidden = true;
+      sb.auth.signInWithPassword({ email, password }).then(({ error }) => {
+        if (error) {
+          errEl.textContent = 'Incorrect email or password.';
+          errEl.hidden = false;
+        }
+        // Success falls through to onAuthStateChange's SIGNED_IN handler
+        // below — it's the single place that reveals the app, so sign-in
+        // and "already had a session on page load" behave identically.
+      });
+    }
+
+    function auth_signOut() {
+      if (!sb) return;
+      sb.auth.signOut();
+      // onAuthStateChange's SIGNED_OUT handler shows the gate again.
+    }
+
+    function auth_setPassword() {
+      if (!sb) return;
+      const password = document.getElementById('auth-newpassword').value;
+      const errEl = document.getElementById('auth-setpw-error');
+      errEl.hidden = true;
+      if (password.length < 8) {
+        errEl.textContent = 'Password must be at least 8 characters.';
+        errEl.hidden = false;
+        return;
+      }
+      sb.auth.updateUser({ password }).then(({ data, error }) => {
+        if (error) {
+          errEl.textContent = error.message || 'Could not set password — try again.';
+          errEl.hidden = false;
+          return;
+        }
+        // Strip the invite token out of the URL now that it's been used —
+        // leaving it there would re-trigger the "set a password" form on
+        // every future reload/share of this exact link.
+        history.replaceState(null, '', location.pathname + location.search);
+        auth_showApp(data.session);
+      });
+    }
+
+    function auth_init() {
+      if (!sb) { auth_showGate(); return; }
+
+      const hash = location.hash || '';
+      const isInviteOrRecovery = /type=(invite|recovery)/.test(hash);
+
+      sb.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_OUT') { auth_showGate(); return; }
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+          if (isInviteOrRecovery && event === 'SIGNED_IN') {
+            // Got a session from the invite link itself, but they still
+            // need to set a real password before treating them as "in".
+            document.getElementById('auth-signin').hidden = true;
+            document.getElementById('auth-setpw').hidden = false;
+            auth_showGate();
+            return;
+          }
+          if (session) auth_showApp(session);
+        }
+      });
+
+      sb.auth.getSession().then(({ data }) => {
+        if (data.session && !isInviteOrRecovery) {
+          auth_showApp(data.session);
+        } else if (!isInviteOrRecovery) {
+          auth_showGate();
+        }
+        // If isInviteOrRecovery, do nothing here — wait for
+        // onAuthStateChange above to fire SIGNED_IN once supabase-js
+        // finishes parsing the token out of the URL, which shows the
+        // set-password form instead.
+      });
+    }
 
     /* ============================================================
        NAVIGATION
@@ -3767,12 +3943,12 @@
        INIT
     ============================================================ */
     document.addEventListener('DOMContentLoaded', () => {
-      // Each wrapped independently: a broken initial render must never be
-      // able to prevent initSync() from running — losing sync entirely
-      // because of one rendering bug would be far worse than the bug itself.
-      safeCall('renderAll (initial)', renderAll);
-      safeCall('script_renderStages (initial)', script_renderStages);
-      safeCall('initSync', initSync);
+      // auth_init() decides whether to show the sign-in gate or go
+      // straight to the dashboard (existing session) — renderAll()/
+      // initSync() only run once that's resolved, from auth_showApp(),
+      // not unconditionally here. Signed-out visitors should never see
+      // even a flash of app data or fire a single sync request.
+      safeCall('auth_init', auth_init);
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
           // Page is being backgrounded (app switch, screen lock, tab
