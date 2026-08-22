@@ -1266,10 +1266,11 @@
           errEl.hidden = false;
           return;
         }
-        // Strip the invite token out of the URL now that it's been used —
-        // leaving it there would re-trigger the "set a password" form on
-        // every future reload/share of this exact link.
-        history.replaceState(null, '', location.pathname + location.search);
+        // Strip the invite token/code out of the URL now that it's been
+        // used — leaving it there would re-trigger the "set a password"
+        // form (or, for the ?code= PKCE flow, fail outright since a code
+        // is single-use) on every future reload/share of this exact link.
+        history.replaceState(null, '', location.pathname);
         auth_showApp(data.session);
       });
     }
@@ -1277,8 +1278,16 @@
     function auth_init() {
       if (!sb) { auth_showGate(); return; }
 
+      // Supabase sends invite/recovery links in one of two shapes
+      // depending on project/auth-flow settings:
+      //   - implicit grant: #access_token=...&type=invite (older default)
+      //   - PKCE:           ?code=xxxxxxxx-xxxx-...        (current default)
+      // supabase-js's detectSessionInUrl handles exchanging EITHER shape
+      // for a session automatically — this only needs to recognise that
+      // one of them is present, so it knows to show "set a password"
+      // instead of treating the resulting SIGNED_IN as a normal login.
       const hash = location.hash || '';
-      const isInviteOrRecovery = /type=(invite|recovery)/.test(hash);
+      const isInviteOrRecovery = /type=(invite|recovery)/.test(hash) || /[?&]code=/.test(location.search);
 
       sb.auth.onAuthStateChange((event, session) => {
         if (event === 'SIGNED_OUT') { auth_showGate(); return; }
