@@ -2635,7 +2635,21 @@
     ]);
     // Letter class includes accented characters (é, ü, ñ, etc.) — plain
     // A-Za-z alone rejects a real fraction of real names outright.
-    const CV_NAME_WORD = "[A-Za-zÀ-ÖØ-öø-ÿ'-]{1,20}";
+    //
+    // BUG FIX: this used to be a single class — [A-Za-zÀ-ÖØ-öø-ÿ'-]{1,20} —
+    // covering upper AND lower case for every position in the word,
+    // including the first letter. That silently dropped the "a name starts
+    // with a capital letter" requirement the shape check is supposed to
+    // enforce, so any run of 2-4 lowercase words (a stray fragment of a
+    // sentence, e.g. "settings while maintaining high" pulled from a CV's
+    // body text) matched just as well as a real name — exactly the
+    // "PROFESSIONAL SUMMARY" garbage-name bug this heuristic was built to
+    // prevent in the first place, just via a different door. First letter
+    // is now its own class, restricted to uppercase only (plain + accented);
+    // only the REST of the word may be lower/upper/accented.
+    const CV_NAME_FIRST_LETTER = "[A-ZÀ-ÖØ-Þ]";
+    const CV_NAME_REST_LETTERS = "[A-Za-zÀ-ÖØ-öø-ÿ'-]{0,19}";
+    const CV_NAME_WORD = CV_NAME_FIRST_LETTER + CV_NAME_REST_LETTERS;
     // Whole-line match: the entire trimmed line is just the name (the
     // common case — a name on its own line).
     const CV_NAME_SHAPE_RE = new RegExp('^' + CV_NAME_WORD + '(\\s' + CV_NAME_WORD + '){1,3}$');
