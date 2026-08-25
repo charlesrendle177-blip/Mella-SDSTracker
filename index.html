@@ -183,6 +183,14 @@
       background: var(--bg);
       padding: 20px;
     }
+    /* Without this, the browser's built-in "hidden means display:none"
+       behavior loses to the display:flex rule above (both are
+       equal-specificity author/UA rules on the same element, and the
+       class rule wins) — auth_showApp() setting .hidden = true would be
+       correct at the DOM level but the full-screen overlay would never
+       actually disappear, permanently masking a successful sign-in
+       behind what looks like an unresponsive login screen. */
+    .auth-gate[hidden] { display: none; }
     .auth-card {
       width: 100%; max-width: 360px;
       background: var(--surface);
