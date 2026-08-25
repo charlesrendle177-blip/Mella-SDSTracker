@@ -76,6 +76,11 @@
 
     /* ===================== SHELL / SIDEBAR ===================== */
     .shell { display: flex; min-height: 100vh; }
+    /* #app-shell is toggled via .hidden on sign-out (auth_showGate()) —
+       without this, the same bug as .auth-gate: the attribute would be
+       set correctly but the dashboard (real candidate data) would stay
+       visually rendered underneath the login overlay regardless. */
+    .shell[hidden] { display: none; }
     .sidebar {
       width: 240px;
       flex: none;
@@ -385,6 +390,7 @@
       font-size: 14px;
       gap: 3px;
     }
+    .empty[hidden] { display: none; }
     .empty-icon {
       width: 52px; height: 52px;
       border-radius: 50%;
