@@ -869,13 +869,32 @@
        #auth-setpw for the one-time "you were invited, pick a password"
        step Supabase's invite-link flow needs — see auth_init() below for
        which one shows. -->
-  <!-- Login gate removed per request — dashboard is reachable straight from
-       the link again, no sign-in step. The auth_*() JS functions further
-       down (auth_showGate/auth_showApp/auth_signIn/auth_signOut/
-       auth_setPassword/auth_init) are intentionally left in place, unused
-       and harmless, in case sign-in needs to come back later — nothing
-       calls auth_init() anymore, so they're fully inert. -->
-  <div class="shell" id="app-shell">
+  <div id="auth-gate" class="auth-gate">
+    <div class="auth-card">
+      <div class="header-mark" aria-hidden="true" style="margin:0 auto 14px;">M</div>
+      <h2 style="text-align:center; margin-bottom:4px;">Candidate Pipeline</h2>
+      <p style="text-align:center; color:var(--label); font-size:13px; margin-bottom:22px;">Mella Recruitment → SDS Limited</p>
+
+      <form id="auth-signin" onsubmit="event.preventDefault(); auth_signIn();">
+        <label class="field-label">Email</label>
+        <input type="email" id="auth-email" placeholder="you@example.com" autocomplete="username" required />
+        <label class="field-label" style="margin-top:10px;">Password</label>
+        <input type="password" id="auth-password" placeholder="••••••••" autocomplete="current-password" required />
+        <div id="auth-error" class="auth-error" hidden></div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Sign in</button>
+      </form>
+
+      <form id="auth-setpw" onsubmit="event.preventDefault(); auth_setPassword();" hidden>
+        <p style="font-size:13px; color:var(--label); margin-bottom:14px;">You've been invited — set a password to finish setting up your account.</p>
+        <label class="field-label">New password</label>
+        <input type="password" id="auth-newpassword" placeholder="At least 8 characters" autocomplete="new-password" minlength="8" required />
+        <div id="auth-setpw-error" class="auth-error" hidden></div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Set password &amp; continue</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="shell" id="app-shell" hidden>
 
     <!-- SIDEBAR -->
     <aside class="sidebar">
@@ -902,7 +921,8 @@
 
       <div class="sidebar-footer">
         <span id="sync-dot" class="sync-dot" title="Sync status"></span>
-        <span>SDS Limited</span>
+        <span id="auth-user-email">SDS Limited</span>
+        <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="auth_signOut()">Sign out</button>
       </div>
     </aside>
 
@@ -3996,9 +4016,12 @@
        INIT
     ============================================================ */
     document.addEventListener('DOMContentLoaded', () => {
-      // Login gate removed — go straight to render + sync, no auth check.
-      safeCall('renderAll (initial)', renderAll);
-      safeCall('initSync', initSync);
+      // auth_init() decides whether to show the sign-in gate or go
+      // straight to the dashboard (existing session) — renderAll()/
+      // initSync() only run once that's resolved, from auth_showApp(),
+      // not unconditionally here. Signed-out visitors should never see
+      // even a flash of app data or fire a single sync request.
+      safeCall('auth_init', auth_init);
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
           // Page is being backgrounded (app switch, screen lock, tab
