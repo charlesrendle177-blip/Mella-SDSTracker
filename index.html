@@ -1232,8 +1232,17 @@
       const email = document.getElementById('auth-email').value.trim();
       const password = document.getElementById('auth-password').value;
       const errEl = document.getElementById('auth-error');
+      const btn = document.querySelector('#auth-signin button[type="submit"]');
       errEl.hidden = true;
+      // Visible feedback the instant the click registers — without this,
+      // a slow/dropped connection looks identical to "the button did
+      // nothing", which is exactly the failure mode a missing .catch()
+      // below would otherwise produce silently.
+      btn.disabled = true;
+      btn.textContent = 'Signing in…';
+      const reset = () => { btn.disabled = false; btn.textContent = 'Sign in'; };
       sb.auth.signInWithPassword({ email, password }).then(({ error }) => {
+        reset();
         if (error) {
           errEl.textContent = 'Incorrect email or password.';
           errEl.hidden = false;
@@ -1241,6 +1250,15 @@
         // Success falls through to onAuthStateChange's SIGNED_IN handler
         // below — it's the single place that reveals the app, so sign-in
         // and "already had a session on page load" behave identically.
+      }).catch(err => {
+        // A rejected promise (network drop, blocked request, CORS/DNS
+        // issue) never reaches the .then() above at all — without this,
+        // that failure mode is completely silent: the button just does
+        // nothing, indistinguishable from a broken click.
+        reset();
+        console.error('Sign-in request failed', err);
+        errEl.textContent = 'Could not reach the server — check your connection and try again.';
+        errEl.hidden = false;
       });
     }
 
@@ -1254,14 +1272,19 @@
       if (!sb) return;
       const password = document.getElementById('auth-newpassword').value;
       const errEl = document.getElementById('auth-setpw-error');
+      const btn = document.querySelector('#auth-setpw button[type="submit"]');
       errEl.hidden = true;
       if (password.length < 8) {
         errEl.textContent = 'Password must be at least 8 characters.';
         errEl.hidden = false;
         return;
       }
+      btn.disabled = true;
+      btn.textContent = 'Setting password…';
+      const reset = () => { btn.disabled = false; btn.textContent = 'Set password & continue'; };
       sb.auth.updateUser({ password }).then(({ data, error }) => {
         if (error) {
+          reset();
           errEl.textContent = error.message || 'Could not set password — try again.';
           errEl.hidden = false;
           return;
@@ -1272,6 +1295,11 @@
         // is single-use) on every future reload/share of this exact link.
         history.replaceState(null, '', location.pathname);
         auth_showApp(data.session);
+      }).catch(err => {
+        reset();
+        console.error('Set-password request failed', err);
+        errEl.textContent = 'Could not reach the server — check your connection and try again.';
+        errEl.hidden = false;
       });
     }
 
@@ -1314,6 +1342,12 @@
         // onAuthStateChange above to fire SIGNED_IN once supabase-js
         // finishes parsing the token out of the URL, which shows the
         // set-password form instead.
+      }).catch(err => {
+        // Network failure on the very first load — fall back to the
+        // gate (already the default visible state) rather than leaving
+        // the page in limbo with no sign of what happened.
+        console.error('getSession failed on load', err);
+        if (!isInviteOrRecovery) auth_showGate();
       });
     }
 
