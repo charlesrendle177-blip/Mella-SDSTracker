@@ -1459,42 +1459,52 @@
     ============================================================ */
     const CANDIDATES_KEY = 'mella_candidates';
 
+    // Records saved before a field existed (e.g. attendance, added after some
+    // candidates were already imported) simply don't have the key at all —
+    // normalize here so every reader can safely assume it's always at least
+    // '', rather than patching every read site individually. Shared between
+    // the localStorage parse below and applyRemoteValue() further down,
+    // since a payload arriving fresh from another device via realtime sync
+    // needs the exact same defensive treatment as one loaded from disk.
+    function candidates_normalize(parsed) {
+      if (!Array.isArray(parsed)) throw new Error('stored candidates value is not an array');
+      // Drop anything that isn't a real object (a stray null/string/number
+      // that ended up in the array some other way) rather than letting it
+      // reach a reader and throw on `.name`/`.outcome`/etc.
+      const items = parsed.filter(c => c && typeof c === 'object');
+      items.forEach(c => {
+        if (c.attendance === undefined) c.attendance = '';
+        if (c.attendanceDate === undefined) c.attendanceDate = '';
+        // Every record saved before role tagging existed is manufacturing-
+        // operative SDS work — that's the only job this app ever tracked
+        // until the site-operative pipeline was added.
+        if (c.role === undefined) c.role = 'manufacturing';
+        if (c.interviewDate === undefined) c.interviewDate = '';
+        if (c.interviewTime === undefined) c.interviewTime = '';
+        if (c.interviewOutcome === undefined) c.interviewOutcome = '';
+        if (c.interviewOutcomeDate === undefined) c.interviewOutcomeDate = '';
+        if (c.noAnswerCount === undefined) c.noAnswerCount = 0;
+        if (c.noAnswerLastAt === undefined) c.noAnswerLastAt = '';
+        if (c.noAnswerActive === undefined) c.noAnswerActive = false;
+      });
+      return items;
+    }
+
+    // In-memory mirror of the candidates array, always current the instant
+    // candidates_save() is called — regardless of whether the localStorage
+    // write that follows actually succeeds. Without this, a device whose
+    // localStorage is full (e.g. Safari's stricter per-origin quota, hit
+    // once enough base64 CV files pile up) would silently keep re-rendering
+    // the OLD list forever: the write throws, localStorage never updates,
+    // and every subsequent candidates_get() call just reads back the same
+    // stale data, even though the change made it to Supabase fine.
+    let candidatesMemCache = null;
     function candidates_get() {
+      if (candidatesMemCache) return candidatesMemCache;
       const raw = localStorage.getItem(CANDIDATES_KEY);
       try {
-        const parsed = JSON.parse(raw || '[]');
-        // A malformed sync payload (bad remote write, corrupted device
-        // storage, etc.) could be valid JSON but the wrong SHAPE — an
-        // object instead of an array, for instance. Don't just let that
-        // silently propagate as "no candidates"; catch it explicitly here
-        // rather than relying on the .filter()/.forEach() call sites
-        // downstream to throw and take something else down with them.
-        if (!Array.isArray(parsed)) throw new Error('stored candidates value is not an array');
-
-        // Drop anything that isn't a real object (a stray null/string/number
-        // that ended up in the array some other way) rather than letting it
-        // reach a reader and throw on `.name`/`.outcome`/etc.
-        const items = parsed.filter(c => c && typeof c === 'object');
-
-        // Records saved before a field existed (e.g. attendance, added after
-        // some candidates were already imported) simply don't have the key at
-        // all — normalize here so every reader can safely assume it's always
-        // at least '', rather than patching every read site individually.
-        items.forEach(c => {
-          if (c.attendance === undefined) c.attendance = '';
-          if (c.attendanceDate === undefined) c.attendanceDate = '';
-          // Every record saved before role tagging existed is manufacturing-
-          // operative SDS work — that's the only job this app ever tracked
-          // until the site-operative pipeline was added.
-          if (c.role === undefined) c.role = 'manufacturing';
-          if (c.interviewDate === undefined) c.interviewDate = '';
-          if (c.interviewTime === undefined) c.interviewTime = '';
-          if (c.interviewOutcome === undefined) c.interviewOutcome = '';
-          if (c.interviewOutcomeDate === undefined) c.interviewOutcomeDate = '';
-          if (c.noAnswerCount === undefined) c.noAnswerCount = 0;
-          if (c.noAnswerLastAt === undefined) c.noAnswerLastAt = '';
-          if (c.noAnswerActive === undefined) c.noAnswerActive = false;
-        });
+        const items = candidates_normalize(JSON.parse(raw || '[]'));
+        candidatesMemCache = items;
         return items;
       } catch (err) {
         console.error('candidates_get: stored data unreadable, returning empty list', err);
@@ -1532,17 +1542,35 @@
     // is called immediately (bypassing the timer) from the visibilitychange/
     // pagehide handlers below whenever the page is about to go away.
     let candidatesSaveTimer = null;
+    let candidatesStorageWarned = false;
     function candidates_flushSave() {
       clearTimeout(candidatesSaveTimer);
       candidatesSaveTimer = null;
-      if (!sb) return;
-      const latest = JSON.parse(localStorage.getItem(CANDIDATES_KEY) || '[]');
+      if (!sb || !candidatesMemCache) return;
+      // Read from the in-memory cache, NOT localStorage — if the localStorage
+      // write in candidates_save() failed (quota exceeded), localStorage
+      // still holds the OLD value. The in-memory cache is the only thing
+      // guaranteed to reflect what was actually just saved.
       sb.from('hub_data')
-        .upsert({ key: CANDIDATES_KEY, value: latest, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+        .upsert({ key: CANDIDATES_KEY, value: candidatesMemCache, updated_at: new Date().toISOString() }, { onConflict: 'key' })
         .then(() => {});
     }
     function candidates_save(items) {
-      localStorage.setItem(CANDIDATES_KEY, JSON.stringify(items));
+      candidatesMemCache = items;
+      try {
+        localStorage.setItem(CANDIDATES_KEY, JSON.stringify(items));
+      } catch (err) {
+        // Quota exceeded (or similar) — don't let this take down the save.
+        // The in-memory cache above already has the change, and the Supabase
+        // upsert below (the real source of truth) still goes out fine; only
+        // the local on-device cache is stale until space frees up, so warn
+        // once rather than repeating the scary generic error toast.
+        console.error('candidates_save: localStorage write failed, continuing with in-memory + remote save', err);
+        if (!candidatesStorageWarned) {
+          candidatesStorageWarned = true;
+          showToast('⚠ This device\'s storage is full — saved to the shared database, but not cached locally. Free up space or try another browser.');
+        }
+      }
       if (!sb) return;
       clearTimeout(candidatesSaveTimer);
       candidatesSaveTimer = setTimeout(candidates_flushSave, 500);
@@ -3723,9 +3751,31 @@
         if (!pendingRemoteUpdate) return;
         const { key, value } = pendingRemoteUpdate;
         pendingRemoteUpdate = null;
-        localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+        applyRemoteValue(key, value);
         renderAll();
       }, 400);
+    }
+
+    // Shared by fetchRemote()'s initial pull, the realtime subscription, and
+    // the deferred-apply timer above — all three take a value that just
+    // arrived from Supabase and need it reflected locally. A raw
+    // localStorage.setItem() here can throw (quota exceeded) and take the
+    // whole sync down with it; catch that so one full-storage device doesn't
+    // stop candidates syncing. For CANDIDATES_KEY specifically, also update
+    // the in-memory cache candidates_get() actually reads from — otherwise
+    // an incoming sync would silently fail to show up because
+    // candidates_get() keeps serving its last in-memory snapshot regardless
+    // of what localStorage now holds (or failed to).
+    function applyRemoteValue(key, value) {
+      const raw = typeof value === 'string' ? value : JSON.stringify(value);
+      try {
+        localStorage.setItem(key, raw);
+      } catch (err) {
+        console.error('applyRemoteValue: localStorage write failed for', key, err);
+      }
+      if (key === CANDIDATES_KEY) {
+        try { candidatesMemCache = candidates_normalize(JSON.parse(raw)); } catch { candidatesMemCache = null; }
+      }
     }
 
     let syncSubscribed = false;
@@ -3747,7 +3797,7 @@
         if (isEmpty && hasLocal) {
           await sb.from('hub_data').upsert({ key: row.key, value: JSON.parse(local), updated_at: new Date().toISOString() });
         } else if (!isEmpty) {
-          localStorage.setItem(row.key, typeof remote === 'string' ? remote : JSON.stringify(remote));
+          applyRemoteValue(row.key, remote);
         }
       }
       setSyncDot(true);
@@ -3770,7 +3820,7 @@
             // snapshot from a moment ago. Defer it: keep re-checking every
             // 400ms until focus moves on, then apply the LATEST payload seen.
             if (isEditingField()) { pendingRemoteUpdate = { key, value }; scheduleDeferredRemoteApply(); return; }
-            localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
+            applyRemoteValue(key, value);
             renderAll();
           })
           .subscribe(status => setSyncDot(status === 'SUBSCRIBED'));
