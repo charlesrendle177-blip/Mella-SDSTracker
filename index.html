@@ -1315,12 +1315,24 @@
       // one of them is present, so it knows to show "set a password"
       // instead of treating the resulting SIGNED_IN as a normal login.
       const hash = location.hash || '';
-      const isInviteOrRecovery = /type=(invite|recovery)/.test(hash) || /[?&]code=/.test(location.search);
+      // let, not const: only the FIRST SIGNED_IN event after page load
+      // should ever be treated as "this came from an invite/recovery
+      // link" — see the reset inside onAuthStateChange below for why.
+      let isInviteOrRecovery = /type=(invite|recovery)/.test(hash) || /[?&]code=/.test(location.search);
 
       sb.auth.onAuthStateChange((event, session) => {
         if (event === 'SIGNED_OUT') { auth_showGate(); return; }
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-          if (isInviteOrRecovery && event === 'SIGNED_IN') {
+          const treatAsInvite = isInviteOrRecovery && event === 'SIGNED_IN';
+          // Clear it unconditionally after this one read. Without this, a
+          // stale ?code=/#type=invite left sitting in the URL (a reloaded
+          // or revisited tab — very easy to end up with) would keep
+          // routing every LATER normal sign-in on this same page load to
+          // the set-password screen instead of the dashboard, even though
+          // the sign-in itself succeeded — exactly the bug where a real
+          // login "does nothing" from the user's side.
+          isInviteOrRecovery = false;
+          if (treatAsInvite) {
             // Got a session from the invite link itself, but they still
             // need to set a real password before treating them as "in".
             document.getElementById('auth-signin').hidden = true;
