@@ -933,10 +933,12 @@
         <button class="tab" onclick="showTab('sequences', this)"><span class="nav-icon">✉</span> Sequences</button>
       </nav>
 
-      <div class="sidebar-footer">
-        <span id="sync-dot" class="sync-dot" title="Sync status"></span>
-        <span id="auth-user-email">SDS Limited</span>
-        <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="auth_signOut()">Sign out</button>
+      <div class="sidebar-footer" style="flex-direction:column; align-items:stretch; gap:10px;">
+        <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+          <span id="sync-dot" class="sync-dot" title="Sync status"></span>
+          <span id="auth-user-email" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">SDS Limited</span>
+        </div>
+        <button class="btn btn-danger btn-sm btn-block" onclick="auth_signOut()">Sign out</button>
       </div>
     </aside>
 
