@@ -1856,6 +1856,7 @@
       if (value !== 'passed' && item.outcome === 'booked') {
         sequence_cancel(id, 'offer_confirmation');
         sequence_cancel(id, 'start_reminder');
+        sequence_cancel(id, 'attendance_check');
       }
       candidates_render();
       renderOverview();
@@ -3622,7 +3623,11 @@
       },
       start_reminder: {
         label: 'Day-before check-in (sent before the first shift)',
-        steps: [{ offsetHours: -24, template: 'Just checking in to make sure you are all set for your first shift on {{startDateTime}}? Any questions let me know – if not wishing you all the best of luck.' }]
+        steps: [{ offsetHours: -24, template: 'Just checking in to make sure you are all set for your first shift on {{startDateTime}}? Any questions let me know – if not wishing you the best of luck.' }]
+      },
+      attendance_check: {
+        label: 'Attendance check-in (sent after their first shift)',
+        steps: [{ offsetHours: 9, template: 'Hi {{name}}, hope your first shift with SDS went well today - how did you get on? Let us know if everything went smoothly. - Mella Recruitment' }]
       }
     };
 
@@ -3781,10 +3786,14 @@
 
     function sequence_scheduleOfferMessages(item) {
       if (!item.startDate) return;
-      // Offer confirmation goes out now; start_reminder is anchored to the
-      // shift date/time (offsetHours: -24 by default), not "now".
+      // Offer confirmation goes out now; start_reminder and attendance_check
+      // are both anchored to the shift date/time itself, not "now" — one
+      // lands the day before (offsetHours: -24), the other after the shift
+      // has had time to run (offsetHours: 9, i.e. end of a typical shift).
       sequence_schedule(item, ['offer_confirmation'], new Date());
-      sequence_schedule(item, ['start_reminder'], new Date(item.startDate + 'T' + (item.startTime || '09:00') + ':00'));
+      const shiftStart = new Date(item.startDate + 'T' + (item.startTime || '09:00') + ':00');
+      sequence_schedule(item, ['start_reminder'], shiftStart);
+      sequence_schedule(item, ['attendance_check'], shiftStart);
     }
 
     // Audit trail for the candidate detail card — last 10 scheduled_messages
