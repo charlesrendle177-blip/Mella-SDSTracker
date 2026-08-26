@@ -20,6 +20,16 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+// The frontend calls this function directly from the browser (GitHub Pages
+// origin) right after inserting an immediate-type scheduled_messages row —
+// without these headers the browser blocks the request at the CORS
+// preflight before it ever reaches this function, and index.html's
+// sb.functions.invoke(...).catch(() => {}) swallows that silently.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
 const TWILIO_ACCOUNT_SID = Deno.env.get('TWILIO_ACCOUNT_SID')!;
 const TWILIO_AUTH_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN')!;
 const TWILIO_MESSAGING_SERVICE_SID = Deno.env.get('TWILIO_MESSAGING_SERVICE_SID')!;
@@ -67,6 +77,10 @@ async function sendOne(row: { id: string; to_number: string; message_body: strin
 }
 
 Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
+
   let body: { mode?: string; id?: string } = {};
   try { body = await req.json(); } catch { /* empty body is fine for neither mode */ }
 
@@ -76,10 +90,10 @@ Deno.serve(async (req) => {
       .eq('id', body.id)
       .single();
     if (error || !row || row.status !== 'pending') {
-      return new Response(JSON.stringify({ ok: false, error: error?.message || 'row not pending' }), { status: 200 });
+      return new Response(JSON.stringify({ ok: false, error: error?.message || 'row not pending' }), { status: 200, headers: corsHeaders });
     }
     await sendOne(row);
-    return new Response(JSON.stringify({ ok: true, sent: 1 }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, sent: 1 }), { status: 200, headers: corsHeaders });
   }
 
   if (body.mode === 'dispatch') {
@@ -89,10 +103,10 @@ Deno.serve(async (req) => {
       .lte('scheduled_for', new Date().toISOString())
       .order('scheduled_for')
       .limit(50);
-    if (error) return new Response(JSON.stringify({ ok: false, error: error.message }), { status: 200 });
+    if (error) return new Response(JSON.stringify({ ok: false, error: error.message }), { status: 200, headers: corsHeaders });
     for (const row of rows || []) await sendOne(row);
-    return new Response(JSON.stringify({ ok: true, sent: (rows || []).length }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, sent: (rows || []).length }), { status: 200, headers: corsHeaders });
   }
 
-  return new Response(JSON.stringify({ ok: false, error: 'unknown mode' }), { status: 400 });
+  return new Response(JSON.stringify({ ok: false, error: 'unknown mode' }), { status: 400, headers: corsHeaders });
 });
