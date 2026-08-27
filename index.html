@@ -1014,7 +1014,7 @@
           <div class="form-block-title">Role for this batch</div>
           <select class="mini-input" id="cv-batch-role" onchange="cvBatchRole = this.value" style="margin-bottom:14px;">
             <option value="manufacturing">Manufacturing Operative</option>
-            <option value="site">Site Operative</option>
+            <!-- Site Operative option hidden — pipeline temporarily disabled, see ROLE_FILTER_OPTIONS -->
           </select>
           <div class="form-block-title">Select CV files (PDF, CSV or Excel)</div>
           <label class="cv-dropzone" for="cv-files"
@@ -1071,7 +1071,7 @@
                 <label class="field-label">Role</label>
                 <select id="new-role">
                   <option value="manufacturing">Manufacturing Operative</option>
-                  <option value="site">Site Operative</option>
+                  <!-- Site Operative option hidden — pipeline temporarily disabled, see ROLE_FILTER_OPTIONS -->
                 </select>
               </div>
             </div>
@@ -2317,10 +2317,14 @@
        in sync with whichever role is currently selected.
     ============================================================ */
     let activeRoleFilter = 'all';
+    // Site Operative pipeline is temporarily disabled — removed from the
+    // filter bar so it can't be selected or uploaded into. Nothing else
+    // (KANBAN_COLUMNS_SITE, interview fields/columns, interview sequences)
+    // was touched, so re-adding { value: 'site', label: 'Site Operative' }
+    // here plus the upload-form <option>s is enough to bring it all back.
     const ROLE_FILTER_OPTIONS = [
       { value: 'all', label: 'All' },
-      { value: 'manufacturing', label: 'Manufacturing' },
-      { value: 'site', label: 'Site Operative' }
+      { value: 'manufacturing', label: 'Manufacturing' }
     ];
     function role_renderFilterBar() {
       const bar = document.getElementById('role-filter-banner');
@@ -3172,7 +3176,7 @@
               <label class="mini-label">Role</label>
               <select class="mini-input" onchange="cv_field('${row._uid}','role',this.value)">
                 <option value="manufacturing" ${row.role === 'manufacturing' ? 'selected' : ''}>Manufacturing Operative</option>
-                <option value="site" ${row.role === 'site' ? 'selected' : ''}>Site Operative</option>
+                <!-- Site Operative option hidden — pipeline temporarily disabled, see ROLE_FILTER_OPTIONS -->
               </select>
             </div>
           </div>
