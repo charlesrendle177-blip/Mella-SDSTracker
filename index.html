@@ -2024,6 +2024,29 @@
       showToast('Restored to pipeline');
     }
 
+    // Same effect as candidate_archive(), just triggered by time instead
+    // of a click — a Booked candidate drops off the Pipeline board and
+    // into the Vault 30 days after outcomeDate (the day they were last
+    // set to 'booked'; re-booking someone refreshes it, same as any other
+    // outcome change). No dedicated cron here — this only ever runs
+    // client-side, from applyRemoteValue() below, so it re-checks every
+    // time fresh candidate data lands (initial load, a sync tick, another
+    // device's edit) rather than needing anyone to have the app open on
+    // the exact day a candidate crosses the 30-day mark.
+    const AUTO_ARCHIVE_BOOKED_AFTER_DAYS = 30;
+    function candidates_autoArchiveStale() {
+      const items = candidatesMemCache;
+      if (!Array.isArray(items)) return;
+      const cutoff = Date.now() - AUTO_ARCHIVE_BOOKED_AFTER_DAYS * 24 * 60 * 60 * 1000;
+      let changed = false;
+      items.forEach(c => {
+        if (c.archived || c.outcome !== 'booked' || !c.outcomeDate) return;
+        const outcomeTime = new Date(c.outcomeDate).getTime();
+        if (!isNaN(outcomeTime) && outcomeTime <= cutoff) { c.archived = true; changed = true; }
+      });
+      if (changed) candidates_save(items);
+    }
+
     // The only place a candidate record is actually removed for good.
     // Only ever called from the Vault tab — never from the Kanban board
     // or the detail modal, which now only archive.
@@ -3887,6 +3910,7 @@
       }
       if (key === CANDIDATES_KEY) {
         try { candidatesMemCache = candidates_normalize(JSON.parse(raw)); } catch { candidatesMemCache = null; }
+        safeCall('candidates_autoArchiveStale', candidates_autoArchiveStale);
       }
     }
 
