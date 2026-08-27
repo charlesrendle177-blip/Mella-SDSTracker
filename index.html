@@ -3784,14 +3784,31 @@
       sequence_schedule(item, ['no_answer_followup'], anchor);
     }
 
+    // Three independent triggers can reach this for the same candidate
+    // (editing the start date/time field, setting outcome to 'booked' via
+    // the radio button, and moving them to the Booked kanban column) —
+    // whichever one fires first legitimately schedules the sequence, but
+    // any of the others firing again afterward (re-saving the same date,
+    // re-selecting an outcome that's already set, re-dropping an
+    // already-booked card) must NOT re-send offer_confirmation, since that
+    // step goes out immediately and a repeat trigger means a real duplicate
+    // text. Guarded by comparing against the anchor last actually
+    // scheduled for — only a genuine change to the shift date/time
+    // re-fires it.
     function sequence_scheduleOfferMessages(item) {
       if (!item.startDate) return;
+      const anchorKey = item.startDate + 'T' + (item.startTime || '09:00');
+      const items = candidates_get();
+      const stored = items.find(i => i.id === item.id);
+      if (stored && stored.offerSequenceAnchor === anchorKey) return;
+      if (stored) { stored.offerSequenceAnchor = anchorKey; candidates_save(items); }
+
       // Offer confirmation goes out now; start_reminder and attendance_check
       // are both anchored to the shift date/time itself, not "now" — one
       // lands the day before (offsetHours: -24), the other after the shift
       // has had time to run (offsetHours: 9, i.e. end of a typical shift).
       sequence_schedule(item, ['offer_confirmation'], new Date());
-      const shiftStart = new Date(item.startDate + 'T' + (item.startTime || '09:00') + ':00');
+      const shiftStart = new Date(anchorKey + ':00');
       sequence_schedule(item, ['start_reminder'], shiftStart);
       sequence_schedule(item, ['attendance_check'], shiftStart);
     }
