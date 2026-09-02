@@ -929,6 +929,7 @@
         <button class="tab" onclick="showTab('upload', this)"><span class="nav-icon">⇪</span> Upload CVs</button>
         <button class="tab" onclick="showTab('vault', this); vault_render()"><span class="nav-icon">🗄</span> Vault</button>
         <button class="tab" onclick="showTab('attendance', this); attendance_render()"><span class="nav-icon">✅</span> Attendance</button>
+        <button class="tab" onclick="showTab('noanswer', this); noanswer_render()"><span class="nav-icon">☎</span> No Answer</button>
         <button class="tab" onclick="showTab('script', this)"><span class="nav-icon">☎</span> Script</button>
         <button class="tab" onclick="showTab('sequences', this)"><span class="nav-icon">✉</span> Sequences</button>
       </nav>
@@ -1119,6 +1120,25 @@
           <div class="empty-icon" aria-hidden="true">✅</div>
           <div class="empty-title">No booked starters yet</div>
           <div class="empty-sub">Once a candidate's call outcome is set to Booked on the Pipeline board, they'll show up here to track.</div>
+        </div>
+      </div>
+
+      <!-- ===== NO ANSWER ===== -->
+      <div id="noanswer" class="section">
+        <div class="section-header">
+          <h2>No Answer</h2>
+          <p>Everyone currently mid-chase after a missed call — the automated texts are already going out, this is just visibility into who's still pending</p>
+        </div>
+
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:14px;">
+          <input type="search" id="noanswer-search-box" placeholder="Search name, mobile, email…" oninput="noanswer_render()" style="flex:1; margin-bottom:0;" />
+        </div>
+
+        <div id="noanswer-list"></div>
+        <div id="noanswer-empty" class="empty" hidden>
+          <div class="empty-icon" aria-hidden="true">☎</div>
+          <div class="empty-title">Nobody mid-chase right now</div>
+          <div class="empty-sub">Log a "☎ No answer" on a candidate's card after a missed call and they'll show up here while the chase sequence runs.</div>
         </div>
       </div>
 
@@ -2668,6 +2688,7 @@
         safeCall('renderOverview', renderOverview);
         safeCall('vault_render', vault_render);
         safeCall('attendance_render', attendance_render);
+        safeCall('noanswer_render', noanswer_render);
       }
     }
 
@@ -3603,6 +3624,63 @@
               <button class="btn btn-ghost btn-sm" title="Clicked in error? Reset back to pending" onclick="event.stopPropagation(); candidate_setAttendance('${c.id}','')">↺ Reset</button>
             </div>
           `}
+        </div>
+      `;
+    }
+
+    /* ============================================================
+       FEATURE: NO ANSWER TAB
+       Pure visibility layer on top of noAnswerActive — not a new Kanban
+       column or a separate trigger. Whoever clicks "☎ No answer" on a
+       candidate's card (see candidate_logNoAnswer()) already schedules
+       the 3-step SMS chase; landing in this list IS that same event,
+       not a second thing that needs wiring up. Scoped to active
+       (non-archived) candidates only, same as Attendance/Pipeline.
+    ============================================================ */
+    function noanswer_timeSince(iso) {
+      if (!iso) return '—';
+      const ms = Date.now() - new Date(iso).getTime();
+      if (isNaN(ms) || ms < 0) return '—';
+      const hours = Math.floor(ms / 3600000);
+      if (hours < 1) return 'just now';
+      if (hours < 24) return hours + 'h ago';
+      return Math.floor(hours / 24) + 'd ago';
+    }
+
+    function noanswer_render() {
+      const list = document.getElementById('noanswer-list');
+      const empty = document.getElementById('noanswer-empty');
+      if (!list || !empty) return;
+
+      const q = (document.getElementById('noanswer-search-box')?.value || '').trim().toLowerCase();
+      const active = candidates_get().filter(c => !c.archived && (activeRoleFilter === 'all' || c.role === activeRoleFilter));
+      const chasing = active.filter(c => c.noAnswerActive && (!q ||
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.mobile || '').toLowerCase().includes(q) ||
+        (c.email || '').toLowerCase().includes(q)));
+
+      if (!chasing.length) {
+        list.innerHTML = '';
+        empty.hidden = false;
+        return;
+      }
+      empty.hidden = true;
+
+      // Longest-waiting first — the ones most overdue a real callback surface at the top.
+      const sorted = [...chasing].sort((a, b) => (a.noAnswerLastAt || '').localeCompare(b.noAnswerLastAt || ''));
+      list.innerHTML = `<div class="starters-grid">${sorted.map(c => safeCandidateHTML(c, noAnswerCardHTML)).join('')}</div>`;
+    }
+
+    function noAnswerCardHTML(c) {
+      return `
+        <div class="starter-card" onclick="candidate_openDetail('${c.id}')">
+          <div class="starter-card-name">${escapeHtml(c.name) || '(no name)'}</div>
+          <span class="badge badge-amber" style="align-self:flex-start;">No answer ×${c.noAnswerCount || 0}</span>
+          <div class="starter-card-meta">${escapeHtml(c.mobile)}${c.mobile ? ' · ' : ''}Last attempt: ${noanswer_timeSince(c.noAnswerLastAt)}</div>
+          <div class="starter-card-actions">
+            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); candidate_logNoAnswer('${c.id}')">☎ Log another attempt</button>
+            <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); candidate_clearNoAnswer('${c.id}')">Stop sequence</button>
+          </div>
         </div>
       `;
     }
