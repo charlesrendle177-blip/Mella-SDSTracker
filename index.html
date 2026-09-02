@@ -3627,34 +3627,41 @@
        run), every insert/update below simply errors harmlessly and is
        swallowed — the rest of the app keeps working with no sends.
     ============================================================ */
+    // Every template ends with the same do-not-reply line — "Mella" is an
+    // Alphanumeric Sender ID with no real number behind it, so a candidate
+    // replying to any of these gets silently dropped by the carrier (see
+    // send-messages Edge Function's header comment). Pointing them back to
+    // the real mobile that actually called them is the only way a reply
+    // reaches anyone.
+    const DO_NOT_REPLY_LINE = ' Please do not reply to this number - text or call the number that called you if you need anything.';
     const SEQUENCES_DEFAULTS = {
       interview_confirmation: {
         label: 'Interview booked — confirmation (sent immediately)',
-        steps: [{ offsetHours: 0, template: 'Hi {{name}}, this confirms your interview for the Site Operative role with SDS on {{interviewDateTime}}. See you then! - Mella Recruitment' }]
+        steps: [{ offsetHours: 0, template: 'Hi {{name}}, this confirms your interview for the Site Operative role with SDS on {{interviewDateTime}}. See you then! - Mella Recruitment' + DO_NOT_REPLY_LINE }]
       },
       interview_reminder: {
         label: 'Interview reminder (sent before the interview)',
-        steps: [{ offsetHours: -24, template: 'Hi {{name}}, just a reminder your interview with SDS is coming up on {{interviewDateTime}}. Let us know if you have any questions - Mella Recruitment' }]
+        steps: [{ offsetHours: -24, template: 'Hi {{name}}, just a reminder your interview with SDS is coming up on {{interviewDateTime}}. Let us know if you have any questions - Mella Recruitment' + DO_NOT_REPLY_LINE }]
       },
       no_answer_followup: {
         label: 'No-answer chase (after a missed call)',
         steps: [
-          { offsetHours: 0,   template: 'Hi {{name}}, sorry I missed you on the phone just now - I\'m calling about a role I think you\'d be a great fit for, with great pay, time-and-a-half for extra hours, and a monthly £260 attendance bonus. Give me a call back when you get a chance? - Harry, Mella Recruitment' },
-          { offsetHours: 48,  template: 'Hi {{name}}, just following up again - still keen to have a quick chat about the role whenever suits you. - Harry, Mella Recruitment' },
-          { offsetHours: 120, template: 'Hi {{name}}, last check-in from me - if you\'re still interested in the role, give me a ring, otherwise I\'ll assume the timing isn\'t right. - Harry, Mella Recruitment' }
+          { offsetHours: 0,   template: 'Hi {{name}}, sorry I missed you on the phone just now - I\'m calling about a role I think you\'d be a great fit for, with great pay, time-and-a-half for extra hours, and a monthly £260 attendance bonus. Give me a call back when you get a chance? - Harry, Mella Recruitment' + DO_NOT_REPLY_LINE },
+          { offsetHours: 48,  template: 'Hi {{name}}, just following up again - still keen to have a quick chat about the role whenever suits you. - Harry, Mella Recruitment' + DO_NOT_REPLY_LINE },
+          { offsetHours: 120, template: 'Hi {{name}}, last check-in from me - if you\'re still interested in the role, give me a ring, otherwise I\'ll assume the timing isn\'t right. - Harry, Mella Recruitment' + DO_NOT_REPLY_LINE }
         ]
       },
       offer_confirmation: {
         label: 'Got the job — start confirmation (sent immediately)',
-        steps: [{ offsetHours: 0, template: 'Hi,\nAs promised, I am pleased to confirm your forthcoming start date with SDS.\n{{startDateTime}} at the below site;\n\nSDS Limited – Sustainable Drainage Systems\nUnit 4 Evercreech Way\nHighbridge\nTA9 4AR\n\nPlease ask for Craig when you arrive. Please wear warehouse appropriate clothing and you will be given PPE on site.\n\nCraig will get you inducted into the warehouse and up and running. Please say Patrick has sent you in.\n\nGood luck, I think you are going to get on well.' }]
+        steps: [{ offsetHours: 0, template: 'Hi,\nAs promised, I am pleased to confirm your forthcoming start date with SDS.\n{{startDateTime}} at the below site;\n\nSDS Limited – Sustainable Drainage Systems\nUnit 4 Evercreech Way\nHighbridge\nTA9 4AR\n\nPlease ask for Craig when you arrive. Please wear warehouse appropriate clothing and you will be given PPE on site.\n\nCraig will get you inducted into the warehouse and up and running. Please say Patrick has sent you in.\n\nGood luck, I think you are going to get on well.\n\nPlease do not reply to this number - text or call the number that called you if you need anything.' }]
       },
       start_reminder: {
         label: 'Day-before check-in (sent before the first shift)',
-        steps: [{ offsetHours: -24, template: 'Just checking in to make sure you are all set for your first shift on {{startDateTime}}? Any questions let me know – if not wishing you the best of luck.' }]
+        steps: [{ offsetHours: -24, template: 'Just checking in to make sure you are all set for your first shift on {{startDateTime}}? Any questions let me know – if not wishing you the best of luck.' + DO_NOT_REPLY_LINE }]
       },
       attendance_check: {
         label: 'Attendance check-in (sent after their first shift)',
-        steps: [{ offsetHours: 9, template: 'Hi {{name}}, hope your first shift with SDS went ok - reply Y if you attended or N if you didn\'t. - Mella Recruitment' }]
+        steps: [{ offsetHours: 9, template: 'Hi {{name}}, hope your first shift with SDS went ok - how did it go?' + DO_NOT_REPLY_LINE }]
       }
     };
 
