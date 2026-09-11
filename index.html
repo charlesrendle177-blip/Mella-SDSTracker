@@ -1090,6 +1090,7 @@
 
         <div style="display:flex; gap:10px; align-items:center; margin-bottom:14px;">
           <input type="search" id="vault-search-box" placeholder="Search name, mobile, email…" oninput="vault_render()" style="flex:1; margin-bottom:0;" />
+          <button class="btn btn-ghost btn-sm" onclick="candidates_previewDuplicates()" style="flex:none;">🧹 Merge duplicates</button>
           <button class="btn btn-ghost btn-sm" onclick="vault_exportCSV()" style="flex:none;">⬇ Export CSV</button>
         </div>
 
@@ -1685,6 +1686,12 @@
       const cvLocation = (document.getElementById('new-cvlocation')?.value || '').trim();
       const role = document.getElementById('new-role')?.value || 'manufacturing';
       if (!name) { alert('Please enter a candidate name.'); return; }
+
+      const existingDup = cv_findDuplicate({ mobile, email });
+      if (existingDup && !confirm(
+        'A candidate with this mobile/email already exists: ' + (existingDup.name || '(no name)') +
+        '.\n\nAdd "' + name + '" as a separate record anyway?'
+      )) return;
 
       const items = candidates_get();
       items.unshift({
@@ -3106,6 +3113,106 @@
       ) || null;
     }
 
+    /* ============================================================
+       DUPLICATE CLEANUP — existing duplicates (mostly from repeat CSV/CV
+       uploads before this check existed) get merged into one record apiece,
+       keeping every note/CV/status any copy carried. Grouped by shared
+       mobile OR email using union-find, so a chain of records linked only
+       via phone on one side and email on the other still ends up as a
+       single group, but two unrelated candidates never get pulled together
+       by coincidence.
+    ============================================================ */
+    function candidates_findDuplicateGroups() {
+      const items = candidates_get();
+      const parent = items.map((_, i) => i);
+      function find(i) { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
+      function union(a, b) { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+
+      const byMobile = new Map(), byEmail = new Map();
+      items.forEach((c, i) => {
+        const m = cv_normalizePhone(c.mobile);
+        const e = cv_normalizeEmail(c.email);
+        if (m) { if (byMobile.has(m)) union(i, byMobile.get(m)); else byMobile.set(m, i); }
+        if (e) { if (byEmail.has(e)) union(i, byEmail.get(e)); else byEmail.set(e, i); }
+      });
+
+      const groups = new Map();
+      items.forEach((c, i) => {
+        const root = find(i);
+        if (!groups.has(root)) groups.set(root, []);
+        groups.get(root).push(c);
+      });
+      return [...groups.values()].filter(g => g.length > 1);
+    }
+
+    // How far along the pipeline each outcome counts as — used so merging
+    // keeps whichever duplicate got furthest, not just whichever was first.
+    const CANDIDATES_OUTCOME_RANK = { '': 0, 'not-interested': 1, 'not-booked': 1, callback: 2, interview: 3, booked: 4 };
+
+    function candidates_mergeGroup(group) {
+      // The oldest record anchors the merged row's id/createdAt, so its
+      // history (and anything that might reference it by id) stays put.
+      const sorted = group.slice().sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+      const merged = { ...sorted[0] };
+
+      const preferNonEmpty = ['mobile', 'email', 'cvLocation', 'fitRating', 'fitNotes',
+        'startDate', 'startTime', 'interviewDate', 'interviewTime', 'interviewOutcomeDate',
+        'outcomeDate', 'attendance', 'attendanceDate', 'cvFile', 'interviewOutcome'];
+      preferNonEmpty.forEach(field => {
+        const withValue = sorted.find(c => c[field]);
+        if (withValue) merged[field] = withValue[field];
+      });
+
+      merged.outcome = sorted.reduce((best, c) =>
+        (CANDIDATES_OUTCOME_RANK[c.outcome] || 0) > (CANDIDATES_OUTCOME_RANK[best] || 0) ? c.outcome : best,
+        merged.outcome || '');
+
+      // A box ticked on ANY copy counts — a duplicate upload should never
+      // un-tick progress already logged against another copy of the same
+      // person.
+      ['s1Done', 's3Done', 's4Done', 'noAnswerActive'].forEach(field => {
+        merged[field] = sorted.some(c => c[field]);
+      });
+      merged.archived = sorted.every(c => c.archived);
+      merged.noAnswerCount = Math.max(...sorted.map(c => c.noAnswerCount || 0));
+
+      // Notes typed against any copy are kept in full, not overwritten —
+      // that's real call history, exactly the "information" a dedupe pass
+      // must not lose.
+      const notes = [...new Set(sorted.map(c => (c.notes || '').trim()).filter(Boolean))];
+      merged.notes = notes.join('\n---\n');
+
+      return merged;
+    }
+
+    function candidates_previewDuplicates() {
+      const groups = candidates_findDuplicateGroups();
+      if (!groups.length) { alert('No duplicate candidates found (matched by mobile number or email).'); return; }
+      const totalRemoved = groups.reduce((n, g) => n + g.length - 1, 0);
+      const lines = groups.map(g => '• ' + g.map(c => c.name || '(no name)').join('   +   ')).join('\n');
+      const ok = confirm(
+        'Found ' + groups.length + ' group(s) of duplicate candidates — ' + totalRemoved + ' record(s) will be merged away:\n\n' +
+        lines +
+        '\n\nEach group becomes a single record, keeping every note, CV and status from every copy (furthest pipeline stage wins for outcome). This can\'t be undone automatically — merge now?'
+      );
+      if (!ok) return;
+      candidates_mergeDuplicates(groups);
+    }
+
+    function candidates_mergeDuplicates(groups) {
+      const items = candidates_get();
+      const idsToRemove = new Set();
+      const mergedRecords = groups.map(group => {
+        group.forEach(c => idsToRemove.add(c.id));
+        return candidates_mergeGroup(group);
+      });
+      const kept = items.filter(c => !idsToRemove.has(c.id));
+      candidates_save([...mergedRecords, ...kept]);
+      candidates_render();
+      vault_render();
+      showToast(mergedRecords.length + ' duplicate group(s) merged');
+    }
+
     function cv_field(uid, field, value) {
       const row = cvPending.find(r => r._uid === uid);
       if (row) row[field] = value;
@@ -3144,6 +3251,12 @@
       if (!row) return;
       if (!row.name || !row.name.trim()) { alert('Please enter a candidate name before adding to the pipeline.'); return; }
 
+      const dup = cv_findDuplicate(row);
+      if (dup && !confirm(
+        'A candidate matching this mobile/email already exists: ' + (dup.name || '(no name)') +
+        '.\n\nAdd "' + row.name.trim() + '" as a separate record anyway?'
+      )) return;
+
       const items = candidates_get();
       items.unshift(cv_toCandidate(row));
       candidates_save(items);
@@ -3159,11 +3272,35 @@
       const missingName = cvPending.filter(r => !r.name || !r.name.trim());
       if (missingName.length && !confirm(missingName.length + ' row(s) have no name and will be skipped — add the rest to the pipeline?')) return;
 
+      // Duplicates are skipped by default rather than prompted one-by-one —
+      // a per-row confirm() would block on every match in a big batch
+      // import, which is exactly the scenario (repeat CSV uploads) that
+      // caused most of the existing duplicates. Skipped rows stay in the
+      // review queue so they can still be added individually (via
+      // cv_addOne, which does confirm) if it's a genuinely different person.
+      const dupes = cvPending.filter(r => r.name && r.name.trim() && cv_findDuplicate(r));
+      if (dupes.length && !confirm(
+        dupes.length + ' row(s) match an existing candidate by mobile/email and will be skipped as duplicates:\n\n' +
+        dupes.map(r => '• ' + r.name.trim()).join('\n') +
+        '\n\nAdd the rest to the pipeline?'
+      )) return;
+
       const items = candidates_get();
       const remaining = [];
       let added = 0;
       cvPending.forEach(row => {
         if (!row.name || !row.name.trim()) { remaining.push(row); return; }
+        // Check against both what's already saved AND what this same batch
+        // has added so far — otherwise the same CV appearing twice in one
+        // CSV would sail straight past cv_findDuplicate(), which only ever
+        // sees the last-saved snapshot, not items still pending this loop.
+        const mobile = cv_normalizePhone(row.mobile);
+        const email = cv_normalizeEmail(row.email);
+        const dupInBatch = (mobile || email) && items.some(c =>
+          (mobile && cv_normalizePhone(c.mobile) === mobile) ||
+          (email && cv_normalizeEmail(c.email) === email)
+        );
+        if (dupInBatch) { remaining.push(row); return; }
         items.unshift(cv_toCandidate(row));
         added++;
       });
