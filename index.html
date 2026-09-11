@@ -292,6 +292,7 @@
     .needs-action-row:last-child { border-bottom: none; }
     .needs-action-row:hover { background: var(--surface-2); }
     .needs-action-name { font-size: 13px; font-weight: 600; }
+    .needs-action-badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 
     /* ===================== CONVERSION STAT LINE (Overview) ===================== */
     .conversion-line {
@@ -3436,16 +3437,22 @@
 
       const items = candidates_get().filter(c => !c.archived && (activeRoleFilter === 'all' || c.role === activeRoleFilter));
       const today = todayISO();
-      const rows = [];
+      // One candidate can legitimately trip more than one of the checks
+      // below at once (e.g. an overdue start reminder AND unconfirmed
+      // attendance) — collect all their reasons together into a single
+      // entry per candidate id rather than one row per reason, so they
+      // don't appear to be duplicated in the list.
+      const byId = new Map();
+      function addReason(c, reason, urgent) {
+        if (!byId.has(c.id)) byId.set(c.id, { id: c.id, name: c.name, reasons: [] });
+        byId.get(c.id).reasons.push({ text: reason, urgent });
+      }
 
       items.forEach(c => {
         if (c.outcome === 'callback' && c.outcomeDate) {
           const days = daysBetweenISO(c.outcomeDate, today);
           if (days >= 2) {
-            rows.push({
-              id: c.id, name: c.name, urgent: true,
-              reason: `Callback logged ${days} day${days === 1 ? '' : 's'} ago`
-            });
+            addReason(c, `Callback logged ${days} day${days === 1 ? '' : 's'} ago`, true);
           }
         }
         // Interview reminder due/overdue — site-role parallel to the
@@ -3454,31 +3461,33 @@
         if (c.outcome === 'interview' && !c.interviewOutcome && c.interviewDate) {
           const diff = daysBetweenISO(c.interviewDate, today);
           if (diff > 0) {
-            rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Interview outcome overdue' });
+            addReason(c, 'Interview outcome overdue', true);
           } else if (diff === 0) {
-            rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Interview today' });
+            addReason(c, 'Interview today', true);
           } else if (diff === -1) {
-            rows.push({ id: c.id, name: c.name, urgent: false, reason: 'Interview tomorrow' });
+            addReason(c, 'Interview tomorrow', false);
           }
         }
         if (c.outcome === 'booked' && !c.s4Done && c.startDate) {
           const diff = daysBetweenISO(c.startDate, today); // today - startDate, in days
           if (diff > 0) {
-            rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Start reminder overdue' });
+            addReason(c, 'Start reminder overdue', true);
           } else if (diff === 0) {
-            rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Start reminder due today' });
+            addReason(c, 'Start reminder due today', true);
           } else if (diff === -1) {
-            rows.push({ id: c.id, name: c.name, urgent: false, reason: 'Start reminder due tomorrow' });
+            addReason(c, 'Start reminder due tomorrow', false);
           }
         }
         if (c.outcome === 'booked' && !c.attendance && c.startDate && c.startDate <= today) {
-          rows.push({ id: c.id, name: c.name, urgent: true, reason: 'Attendance not confirmed' });
+          addReason(c, 'Attendance not confirmed', true);
         }
       });
 
+      const rows = [...byId.values()];
       if (!rows.length) { wrap.innerHTML = ''; return; }
 
-      // Most urgent (overdue) first, keeping a stable order within each group.
+      // Most urgent (any overdue reason) first, keeping a stable order within each group.
+      rows.forEach(r => { r.urgent = r.reasons.some(x => x.urgent); });
       rows.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0));
 
       wrap.innerHTML = `
@@ -3487,7 +3496,9 @@
           ${rows.map(r => `
             <div class="needs-action-row" onclick="candidate_openDetail('${r.id}')">
               <span class="needs-action-name">${escapeHtml(r.name) || '(no name)'}</span>
-              <span class="badge ${r.urgent ? 'badge-red' : 'badge-amber'}">${escapeHtml(r.reason)}</span>
+              <span class="needs-action-badges">
+                ${r.reasons.map(x => `<span class="badge ${x.urgent ? 'badge-red' : 'badge-amber'}">${escapeHtml(x.text)}</span>`).join('')}
+              </span>
             </div>
           `).join('')}
         </div>
