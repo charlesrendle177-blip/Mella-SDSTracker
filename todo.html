@@ -1355,15 +1355,23 @@
       const { data: rows, error } = await sb.from('hub_data').select('key, value').in('key', ALL_KEYS);
       if (error || !rows) { setSyncDot(false); return; }
 
-      for (const row of rows) {
-        const remote = row.value;
-        const local  = localStorage.getItem(row.key);
-        const isEmpty = remote === null || remote === undefined || (Array.isArray(remote) && remote.length === 0);
+      // Iterate every key this app cares about, not just the rows that
+      // came back — a key can be "empty" two different ways: a row
+      // exists with value [] (handled below), or the row is missing
+      // from the table entirely (e.g. the table got cleared). Looping
+      // over `rows` alone silently ignored the second case, so a wiped
+      // table never got repopulated from a device's local copy.
+      const byKey = new Map(rows.map(r => [r.key, r.value]));
+      for (const key of ALL_KEYS) {
+        const hasRow = byKey.has(key);
+        const remote = byKey.get(key);
+        const local  = localStorage.getItem(key);
+        const isEmpty = !hasRow || remote === null || remote === undefined || (Array.isArray(remote) && remote.length === 0);
         const hasLocal = local && local !== '[]' && local !== '';
         if (isEmpty && hasLocal) {
-          await sb.from('hub_data').upsert({ key: row.key, value: JSON.parse(local), updated_at: new Date().toISOString() });
+          await sb.from('hub_data').upsert({ key, value: JSON.parse(local), updated_at: new Date().toISOString() }, { onConflict: 'key' });
         } else if (!isEmpty) {
-          localStorage.setItem(row.key, JSON.stringify(remote));
+          localStorage.setItem(key, JSON.stringify(remote));
         }
       }
       setSyncDot(true);
